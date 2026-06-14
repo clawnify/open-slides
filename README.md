@@ -1,5 +1,7 @@
 # Open Slides
 
+<img src="readme-banner.png" alt="Open Slides preview" width="100%" />
+
 An open-source, **agent-friendly slide maker**. Write presentations in plain
 **Markdown**, drop in your own logos and images, **present fullscreen right in
 the browser**, and export to **PDF**.
