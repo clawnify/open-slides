@@ -5,7 +5,22 @@ CREATE TABLE IF NOT EXISTS decks (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
   title TEXT NOT NULL,
   content TEXT NOT NULL DEFAULT '',
-  theme TEXT NOT NULL DEFAULT 'white',
+  theme TEXT NOT NULL DEFAULT 'black',
+  -- per-presentation navigation chrome (arrows / progress bar / slide number)
+  nav TEXT NOT NULL DEFAULT '{"arrows":true,"progress":true,"slideNumber":true}',
+  -- which brand from the library this deck uses (NULL = the first/default brand)
+  brand_id TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Brand library: each brand is an agent-authored DESIGN.md. The prose guides
+-- generation; a fenced `clawnify-brand` tokens block drives reveal.js theme
+-- variables, fonts and the logo. A deck picks one brand to inherit.
+CREATE TABLE IF NOT EXISTS brands (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+  name TEXT NOT NULL DEFAULT 'Brand',
+  design_md TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
