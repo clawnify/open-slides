@@ -1,0 +1,22 @@
+name = "open-slides"
+main = "src/server/index.ts"
+compatibility_date = "2026-04-15"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+# Run the Worker first for API routes so the SPA fallback can't intercept them.
+# Without this, an iframe/navigation GET to /api/.../view gets served index.html
+# instead of reaching the Worker (the preview renders the app inside itself).
+run_worker_first = ["/api/*"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "open-slides-db"
+database_id = "local"
+
+[[r2_buckets]]
+binding = "UPLOADS"
+bucket_name = "open-slides-uploads"
