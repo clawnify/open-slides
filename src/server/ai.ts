@@ -12,7 +12,7 @@ import type { SlideTemplate } from "./templates";
 // Provider-agnostic via the Vercel AI SDK. Works with a direct Anthropic key
 // (BYOK) or OpenRouter (platform standard); Anthropic wins when both are set.
 const ANTHROPIC_MODEL = "claude-sonnet-4-6";
-const OPENROUTER_MODEL = "anthropic/claude-sonnet-4";
+const OPENROUTER_MODEL = "anthropic/claude-sonnet-4.6";
 
 export type AiEnv = { ANTHROPIC_API_KEY?: string; OPENROUTER_API_KEY?: string };
 export const hasAiKey = (env: AiEnv) => !!(env.ANTHROPIC_API_KEY || env.OPENROUTER_API_KEY);
