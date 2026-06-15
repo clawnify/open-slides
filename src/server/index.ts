@@ -12,7 +12,7 @@ import { revealDoc } from "./reveal";
 import { renderDeckPdf, PdfRenderError } from "./pdf";
 import { parseTokens, brandHead, brandLogoTag, setTokensInMd, DEFAULT_BRAND_MD, type BrandTokens } from "./brand";
 import { TEMPLATES } from "./templates";
-import { generate, editBrand } from "./ai";
+import { generate, editBrand, hasAiKey } from "./ai";
 
 type Bindings = {
   DB: D1Database;
@@ -20,8 +20,11 @@ type Bindings = {
   // Injected into every WfP app at deploy time; authorizes managed services
   // (here: the PDF render service). Absent in local dev unless set in .dev.vars.
   CLAWNIFY_TOKEN?: string;
-  // Org-standard LLM key (injected in prod) for natural-language slide generation.
+  // LLM keys for natural-language generation. OPENROUTER_API_KEY is the platform
+  // standard (injected in prod); ANTHROPIC_API_KEY is supported as BYOK and wins
+  // when both are present.
   OPENROUTER_API_KEY?: string;
+  ANTHROPIC_API_KEY?: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -136,8 +139,8 @@ app.get("/api/decks/:id/view", async (c) => {
 app.post("/api/generate", async (c) => {
   const b = await c.req.json<{ prompt?: string; current_slide?: string; deck_context?: string; deck_id?: string }>();
   if (!b.prompt?.trim()) return c.json({ error: "prompt is required" }, 400);
-  if (!c.env.OPENROUTER_API_KEY) {
-    return c.json({ error: "AI generation isn't configured (missing OPENROUTER_API_KEY)." }, 503);
+  if (!hasAiKey(c.env)) {
+    return c.json({ error: "AI generation isn't configured (set ANTHROPIC_API_KEY or OPENROUTER_API_KEY)." }, 503);
   }
   try {
     const deck = b.deck_id ? await get<Deck>("SELECT brand_id FROM decks WHERE id = ?", [b.deck_id]) : null;
@@ -225,7 +228,7 @@ app.post("/api/brands/:id/prompt", async (c) => {
   if (!existing) return c.json({ error: "Not found" }, 404);
   const { instruction } = await c.req.json<{ instruction?: string }>();
   if (!instruction?.trim()) return c.json({ error: "instruction is required" }, 400);
-  if (!c.env.OPENROUTER_API_KEY) return c.json({ error: "AI isn't configured (missing OPENROUTER_API_KEY)." }, 503);
+  if (!hasAiKey(c.env)) return c.json({ error: "AI isn't configured (set ANTHROPIC_API_KEY or OPENROUTER_API_KEY)." }, 503);
   try {
     const nextMd = await editBrand(c.env, { instruction: instruction.trim(), currentMd: existing.design_md });
     await run("UPDATE brands SET design_md = ?, updated_at = datetime('now') WHERE id = ?", [nextMd, id]);

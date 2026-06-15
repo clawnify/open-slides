@@ -3,10 +3,34 @@
 // author slides in this app's format, grounded in the active brand so output is
 // on-brand and layout-consistent.
 
+import { generateText, type LanguageModel } from "ai";
+import { createAnthropic } from "@ai-sdk/anthropic";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { BrandTokens } from "./brand";
 import type { SlideTemplate } from "./templates";
 
-const MODEL = "anthropic/claude-sonnet-4";
+// Provider-agnostic via the Vercel AI SDK. Works with a direct Anthropic key
+// (BYOK) or OpenRouter (platform standard); Anthropic wins when both are set.
+const ANTHROPIC_MODEL = "claude-sonnet-4-6";
+const OPENROUTER_MODEL = "anthropic/claude-sonnet-4";
+
+export type AiEnv = { ANTHROPIC_API_KEY?: string; OPENROUTER_API_KEY?: string };
+export const hasAiKey = (env: AiEnv) => !!(env.ANTHROPIC_API_KEY || env.OPENROUTER_API_KEY);
+
+// OpenRouter attribution — always credit the platform, so usage rolls up under
+// Clawnify rather than per-app.
+const OPENROUTER_ATTRIBUTION = {
+  "HTTP-Referer": "https://clawnify.com",
+  "X-Title": "Clawnify",
+};
+
+function model(env: AiEnv): LanguageModel {
+  if (env.ANTHROPIC_API_KEY) return createAnthropic({ apiKey: env.ANTHROPIC_API_KEY })(ANTHROPIC_MODEL);
+  if (env.OPENROUTER_API_KEY) {
+    return createOpenRouter({ apiKey: env.OPENROUTER_API_KEY, headers: OPENROUTER_ATTRIBUTION })(OPENROUTER_MODEL);
+  }
+  throw new Error("AI generation unavailable: set ANTHROPIC_API_KEY or OPENROUTER_API_KEY.");
+}
 
 export type GenAction = "edit_current" | "add_slides" | "replace_deck";
 export interface GenResult { action: GenAction; content: string }
@@ -64,30 +88,15 @@ ACTION: <edit_current|add_slides|replace_deck>
 <the slide document — exactly ONE slide for edit_current; one or more slides separated by lines of \`---\` otherwise. No code fences, no commentary.>`;
 }
 
-async function call(env: { OPENROUTER_API_KEY?: string }, system: string, user: string): Promise<string> {
-  if (!env.OPENROUTER_API_KEY) {
-    throw new Error("AI generation unavailable: OPENROUTER_API_KEY is not set.");
-  }
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-      "Content-Type": "application/json",
-      "X-Title": "Open Slides",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 3000,
-      temperature: 0.6,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    }),
+async function call(env: AiEnv, system: string, user: string): Promise<string> {
+  const { text } = await generateText({
+    model: model(env),
+    system,
+    prompt: user,
+    maxOutputTokens: 3000,
+    temperature: 0.6,
   });
-  if (!res.ok) throw new Error(`OpenRouter ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const json = (await res.json()) as { choices: Array<{ message: { content: string } }> };
-  return (json.choices[0]?.message?.content ?? "").trim();
+  return text.trim();
 }
 
 // Models sometimes wrap output in ```; strip a single outer fence if present.
@@ -96,7 +105,7 @@ function stripFence(s: string): string {
   return (m ? m[1] : s).trim();
 }
 
-export async function generate(env: { OPENROUTER_API_KEY?: string }, input: GenInput): Promise<GenResult> {
+export async function generate(env: AiEnv, input: GenInput): Promise<GenResult> {
   const system = systemPrompt(input.tokens, input.designMd, input.templates);
   const user = `CURRENT SLIDE (the one the user is looking at):
 ${input.currentSlide || "(none)"}
@@ -118,7 +127,7 @@ ${input.prompt}`;
 // Edit a brand's DESIGN.md by natural-language instruction. Returns the full
 // updated DESIGN.md (keeping the fenced clawnify-brand tokens block valid).
 export async function editBrand(
-  env: { OPENROUTER_API_KEY?: string },
+  env: AiEnv,
   opts: { instruction: string; currentMd: string },
 ): Promise<string> {
   const system = `You edit a brand design system written as a DESIGN.md. It contains prose plus a fenced \`clawnify-brand\` block of JSON tokens:
