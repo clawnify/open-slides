@@ -147,7 +147,8 @@ export function revealDoc(opts: DocOpts): string {
       ? `Reveal.initialize({
            plugins: [RevealMarkdown, RevealHighlight],
            ${SIZING}
-           controls: false, progress: false, embedded: true, transition: 'none',
+           controls: false, progress: false, embedded: false, transition: 'none',
+           minScale: 0.05, maxScale: 1,
          }).then(function () { renderCharts(document); });`
       : `var params = new URLSearchParams(location.search);
          Reveal.initialize({
@@ -252,19 +253,17 @@ export function revealDoc(opts: DocOpts): string {
 <link rel="stylesheet" href="${REVEAL}/plugin/highlight/monokai.css" />
 <style>
   html,body{margin:0;padding:0;height:100%}
-  .reveal .slides { text-align: left; }
-  /* Designed slides are a fixed 1280x720 box, so their absolute (inset:0) layout
-     fills correctly in BOTH the scaled screen view AND reveal's print-pdf pages.
-     (Relying on the section's parent height collapses the content in print.) */
-  .reveal .slides > section.design { width: 1280px; height: 720px; box-sizing: border-box; }
-  /* Markdown slides: vertically centered, classic look. Screen-only + applied to
-     .past/.future so the outgoing slide doesn't snap to top-left and flash during
-     a transition. In print, reveal's native pagination centers them. */
+  /* Screen layout only — lets reveal's transform-scale do its own thing in print.
+     Designed slides fill the section (which reveal sizes to the slide); markdown
+     slides are vertically centered. .past/.future keep centering during a
+     transition so the outgoing slide doesn't snap to top-left and flash. */
   @media screen {
+    .reveal .slides { text-align: left; }
+    .reveal .slides > section { height: 100%; box-sizing: border-box; }
     .reveal .slides > section.md.present,
     .reveal .slides > section.md.past,
     .reveal .slides > section.md.future {
-      display: flex !important; flex-direction: column; height: 100%;
+      display: flex !important; flex-direction: column;
       justify-content: center; align-items: center; text-align: center; padding: 0 8%;
     }
     .reveal .slides > section.md > * { max-width: 100%; }
