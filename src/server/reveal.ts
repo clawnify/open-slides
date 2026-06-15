@@ -16,6 +16,49 @@
 
 const REVEAL = "https://cdn.jsdelivr.net/npm/reveal.js@5.1.0";
 
+// Deterministic, dependency-free SVG charts. A slide includes a chart with:
+//   <div class="chart" style="height:..." data-chart='{"type":"bar","labels":[...],"data":[...]}'></div>
+// This script computes & draws an on-brand SVG (bar / line / donut) into it,
+// picking up the brand accent/muted colors. SVG renders identically in the
+// canvas, while presenting, and in the exported PDF.
+const CHART_FNS = `
+  function _bv(n,f){var v=getComputedStyle(document.documentElement).getPropertyValue(n).trim();return v||f;}
+  function _arc(cx,cy,r,ir,a0,a1,fill){
+    function p(rad,a){return [cx+rad*Math.cos(a),cy+rad*Math.sin(a)];}
+    var lg=(a1-a0)>Math.PI?1:0,o0=p(r,a0),o1=p(r,a1),i1=p(ir,a1),i0=p(ir,a0);
+    return '<path d="M'+o0[0]+' '+o0[1]+' A'+r+' '+r+' 0 '+lg+' 1 '+o1[0]+' '+o1[1]+' L'+i1[0]+' '+i1[1]+' A'+ir+' '+ir+' 0 '+lg+' 0 '+i0[0]+' '+i0[1]+' Z" fill="'+fill+'"/>';
+  }
+  function renderCharts(root){
+    var nodes=(root||document).querySelectorAll('[data-chart]:not([data-charted])');
+    for(var k=0;k<nodes.length;k++){(function(el){
+      el.setAttribute('data-charted','1');
+      var cfg; try{cfg=JSON.parse(el.getAttribute('data-chart'));}catch(e){return;}
+      var w=el.clientWidth||640,h=el.clientHeight||340;
+      var accent=_bv('--brand-accent','#6D4CFF'),muted=_bv('--brand-muted','#9a9a9a'),text=_bv('--brand-text','#333');
+      var type=cfg.type||'bar',labels=cfg.labels||[],data=(cfg.data||[]).map(Number);
+      var s='<svg width="100%" height="100%" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none">';
+      var pL=44,pB=30,pT=12,pR=12,cw=w-pL-pR,ch=h-pT-pB,max=Math.max.apply(null,data.concat([1]));
+      if(type==='bar'){
+        var n=data.length||1,step=cw/n,bw=step*0.62;
+        for(var i=0;i<data.length;i++){var bh=ch*(data[i]/max),x=pL+i*step+(step-bw)/2,y=pT+ch-bh;
+          s+='<rect x="'+x+'" y="'+y+'" width="'+bw+'" height="'+Math.max(bh,1)+'" rx="3" fill="'+accent+'"/>';
+          s+='<text x="'+(x+bw/2)+'" y="'+(h-10)+'" fill="'+muted+'" font-size="13" text-anchor="middle">'+(labels[i]||'')+'</text>';}
+      } else if(type==='line'){
+        var n=data.length,pts=[];for(var i=0;i<n;i++){pts.push([pL+(n<=1?cw/2:i*(cw/(n-1))),pT+ch-ch*(data[i]/max)]);}
+        var d='';for(var i=0;i<pts.length;i++){d+=(i?'L':'M')+pts[i][0]+' '+pts[i][1]+' ';}
+        s+='<path d="'+d+'" fill="none" stroke="'+accent+'" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>';
+        for(var i=0;i<pts.length;i++){s+='<circle cx="'+pts[i][0]+'" cy="'+pts[i][1]+'" r="4" fill="'+accent+'"/>';
+          s+='<text x="'+pts[i][0]+'" y="'+(h-10)+'" fill="'+muted+'" font-size="13" text-anchor="middle">'+(labels[i]||'')+'</text>';}
+      } else if(type==='donut'||type==='pie'){
+        var total=0;for(var i=0;i<data.length;i++)total+=data[i];total=total||1;
+        var cx=w/2,cy=(h-14)/2+pT,r=Math.min(cw,ch)/2,ir=type==='donut'?r*0.62:0,a0=-Math.PI/2;
+        var pal=[accent,muted,text,'#cfcfcf','#e6e6e6'];
+        for(var i=0;i<data.length;i++){var a1=a0+2*Math.PI*(data[i]/total);s+=_arc(cx,cy,r,ir,a0,a1,pal[i%pal.length]);a0=a1;}
+      }
+      s+='</svg>';el.innerHTML=s;
+    })(nodes[k]);}
+  }`;
+
 export const THEMES = [
   "white", "black", "league", "beige", "sky", "night",
   "serif", "simple", "solarized", "moon", "dracula", "blood",
@@ -91,19 +134,21 @@ export function revealDoc(opts: DocOpts): string {
   const harness =
     opts.mode === "print"
       ? `Reveal.initialize({
-           plugins: [RevealMarkdown, RevealHighlight, RevealNotes],
+           plugins: [RevealMarkdown, RevealHighlight],
            ${SIZING}
+           showNotes: false,
            pdfMaxPagesPerSlide: 1,
            pdfSeparateFragments: false,
            controls: false,
            progress: false,
-         });`
+           slideNumber: ${opts.nav && opts.nav.slideNumber ? "'c/t'" : "false"},
+         }).then(function () { renderCharts(document); });`
       : opts.thumb
       ? `Reveal.initialize({
            plugins: [RevealMarkdown, RevealHighlight],
            ${SIZING}
            controls: false, progress: false, embedded: true, transition: 'none',
-         });`
+         }).then(function () { renderCharts(document); });`
       : `var params = new URLSearchParams(location.search);
          Reveal.initialize({
            plugins: [RevealMarkdown, RevealHighlight, RevealNotes],
@@ -118,6 +163,8 @@ export function revealDoc(opts: DocOpts): string {
            var h = parseInt(params.get('h') || '0', 10) || 0;
            var v = parseInt(params.get('v') || '0', 10) || 0;
            if (h || v) Reveal.slide(h, v);
+           renderCharts(Reveal.getCurrentSlide());
+           Reveal.on('slidechanged', function (e) { renderCharts(e.currentSlide); });
            Reveal.on('slidechanged', report);
            addEventListener('message', function (e) {
              var m = e.data || {};
@@ -205,17 +252,23 @@ export function revealDoc(opts: DocOpts): string {
 <link rel="stylesheet" href="${REVEAL}/plugin/highlight/monokai.css" />
 <style>
   html,body{margin:0;padding:0;height:100%}
-  /* Designed slides control their own layout and are left-aligned; markdown
-     slides keep the classic vertically-centered look. The centering is scoped
-     to the active (.present) section so it beats reveal's display:block without
-     overriding the display:none on inactive slides (which would stack them). */
   .reveal .slides { text-align: left; }
-  .reveal .slides > section { height: 100%; box-sizing: border-box; }
-  .reveal .slides > section.md.present {
-    display: flex !important; flex-direction: column;
-    justify-content: center; align-items: center; text-align: center; padding: 0 8%;
+  /* Designed slides are a fixed 1280x720 box, so their absolute (inset:0) layout
+     fills correctly in BOTH the scaled screen view AND reveal's print-pdf pages.
+     (Relying on the section's parent height collapses the content in print.) */
+  .reveal .slides > section.design { width: 1280px; height: 720px; box-sizing: border-box; }
+  /* Markdown slides: vertically centered, classic look. Screen-only + applied to
+     .past/.future so the outgoing slide doesn't snap to top-left and flash during
+     a transition. In print, reveal's native pagination centers them. */
+  @media screen {
+    .reveal .slides > section.md.present,
+    .reveal .slides > section.md.past,
+    .reveal .slides > section.md.future {
+      display: flex !important; flex-direction: column; height: 100%;
+      justify-content: center; align-items: center; text-align: center; padding: 0 8%;
+    }
+    .reveal .slides > section.md > * { max-width: 100%; }
   }
-  .reveal .slides > section.md > * { max-width: 100%; }
 </style>
 ${opts.brandHeadHtml}
 ${printShim}
@@ -227,7 +280,8 @@ ${sections}
 <script src="${REVEAL}/dist/reveal.js"></script>
 <script src="${REVEAL}/plugin/markdown/markdown.js"></script>
 <script src="${REVEAL}/plugin/highlight/highlight.js"></script>
-<script src="${REVEAL}/plugin/notes/notes.js"></script>
+${opts.mode === "view" && !opts.thumb ? `<script src="${REVEAL}/plugin/notes/notes.js"></script>` : ""}
+<script>${CHART_FNS}</script>
 <script>${harness}</script>
 </body></html>`;
 }

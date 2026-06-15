@@ -64,6 +64,7 @@ Each slide is EITHER:
   Use \`class="kicker"\` for a small uppercase accent eyebrow.
 - Per-slide background (optional): put \`<!-- .slide: data-background-color="#xxxxxx" -->\` right after \`<!-- html -->\` (or as the first line of a markdown slide). You may also use data-background-gradient or data-background-image="assets/<name>".
 - Entrance animations (optional): add \`class="fragment fade-up"\` to elements that should animate in on click. Effects: fade-up, fade-down, fade-left, fade-right, zoom-in, grow.
+- Charts: to show data, add \`<div class="chart" style="height:380px" data-chart='{"type":"bar","labels":["Q1","Q2"],"data":[12,19]}'></div>\` — type is bar | line | donut. It renders as on-brand SVG automatically; do NOT add your own colors or styling inside it. Give the chart div a height (or flex:1 with min-height:0 inside a flex column).
 - Only reference images the user explicitly provides as \`assets/<name>\`; otherwise omit images.
 
 ## Brand design system — FOLLOW its layout, spacing, voice and guidelines
@@ -137,9 +138,10 @@ export async function editBrand(
   "radius": "14px", "logo": "" }
 
 Apply the user's instruction (e.g. "make it darker and more playful", "use a serif display font", "more vibrant accent"). Rules:
+- Reflect the change in BOTH the tokens AND the prose, so the visual design and the written guidelines stay in sync. "Darker" → update colors (bg/text) AND the look/voice prose. "Playful" → maybe a rounder radius, brighter accent, and a note in voice. "Serif display" → update fonts.heading + google AND mention it in Typography. Never change only the prose when the instruction implies a visual change.
 - Keep the \`clawnify-brand\` block present and VALID JSON.
 - When you change a font to a Google font, set fonts.google to the correct specs (e.g. "Playfair+Display:wght@500;700"); for system fonts use "Georgia, serif" / "-apple-system, ..." and drop it from google.
-- Keep colors as hex. Keep the prose coherent with the tokens.
+- Keep colors as hex. Preserve the document's section structure (it's a full design system, not just tokens).
 - Return ONLY the full updated DESIGN.md (no code fences around the whole thing, no commentary).`;
   const user = `Current DESIGN.md:\n\n${opts.currentMd}\n\nInstruction:\n${opts.instruction}`;
   return stripFence(await call(env, system, user));

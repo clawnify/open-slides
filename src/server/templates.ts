@@ -54,6 +54,16 @@ export const TEMPLATES: SlideTemplate[] = [
   </ul>`),
   },
   {
+    id: "chart",
+    name: "Chart",
+    body: `<!-- html -->
+<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:0 9%;box-sizing:border-box">
+  <div class="kicker" style="font-size:22px">Metric</div>
+  <h2 style="font:700 50px/1.06 var(--r-heading-font);margin:8px 0 0;color:var(--brand-heading)">Growth by quarter</h2>
+  <div class="chart" style="flex:1;min-height:0;max-height:400px;margin-top:18px" data-chart='{"type":"bar","labels":["Q1","Q2","Q3","Q4"],"data":[12,19,15,27]}'></div>
+</div>`,
+  },
+  {
     id: "two-col",
     name: "Two columns",
     body: `<!-- html -->

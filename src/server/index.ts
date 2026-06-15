@@ -10,7 +10,7 @@ import {
 } from "./uploads";
 import { revealDoc } from "./reveal";
 import { renderDeckPdf, PdfRenderError } from "./pdf";
-import { parseTokens, brandHead, brandLogoTag, setTokensInMd, DEFAULT_BRAND_MD, type BrandTokens } from "./brand";
+import { parseTokens, brandHead, brandLogoTag, brandGuideHtml, setTokensInMd, DEFAULT_BRAND_MD, type BrandTokens } from "./brand";
 import { TEMPLATES } from "./templates";
 import { generate, editBrand, hasAiKey } from "./ai";
 
@@ -82,8 +82,8 @@ app.post("/api/decks", async (c) => {
   const b = await c.req.json<Partial<Deck>>();
   if (!b.title?.trim()) return c.json({ error: "title is required" }, 400);
   const res = await run(
-    "INSERT INTO decks (title, content, theme) VALUES (?, ?, ?)",
-    [b.title.trim(), b.content ?? "", b.theme ?? "white"],
+    "INSERT INTO decks (title, content, theme, brand_id) VALUES (?, ?, ?, ?)",
+    [b.title.trim(), b.content ?? "", b.theme ?? "black", b.brand_id ?? null],
   );
   const row = await get<Deck>("SELECT * FROM decks WHERE rowid = ?", [res.lastInsertRowid]);
   return c.json(row, 201);
@@ -238,25 +238,12 @@ app.post("/api/brands/:id/prompt", async (c) => {
   }
 });
 
-// Full preview of a brand: a small sample deck rendered with it.
-const BRAND_SAMPLE = [
-  `<!-- html -->\n<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;text-align:left;padding:0 9%;box-sizing:border-box"><div class="kicker" style="font-size:22px">Brand preview</div><h1 style="font:700 var(--brand-hero-size)/1.02 var(--r-heading-font);color:var(--brand-heading);margin:14px 0 0">The quick brown fox</h1><p style="font:400 var(--brand-body-size)/1.4 var(--r-main-font);color:var(--brand-muted);max-width:72%;margin-top:18px">A supporting line set in the body font and color.</p></div>`,
-  `## A markdown slide\n\n- Bullet one\n- Bullet two\n\n> A short quote in the brand voice.`,
-  `<!-- html -->\n<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;padding:0 9%;box-sizing:border-box"><div style="font:700 200px/1 var(--r-heading-font);color:var(--brand-accent)">98%</div><p style="font:400 var(--brand-body-size)/1.3 var(--r-main-font);color:var(--brand-text)">Accent color on a big stat.</p></div>`,
-].join("\n\n---\n\n");
-
+// Full visual preview of a brand: a guidelines page (example slides + color
+// palette + type scale) rendered with the brand's own tokens & fonts.
 app.get("/api/brands/:id/preview", async (c) => {
-  const tokens = parseTokens(await brandMdFor(c.req.param("id")));
-  return c.html(
-    revealDoc({
-      mode: "view",
-      content: BRAND_SAMPLE,
-      theme: "black",
-      brandHeadHtml: brandHead(tokens),
-      brandLogoHtml: brandLogoTag(resolveLogoForView(tokens.logo)),
-      nav: { arrows: true, progress: false, slideNumber: false },
-    }),
-  );
+  const row = await get<Brand>("SELECT * FROM brands WHERE id = ?", [c.req.param("id")]);
+  const md = row?.design_md || DEFAULT_BRAND_MD;
+  return c.html(brandGuideHtml(row?.name || "Brand", parseTokens(md)));
 });
 
 // Designed, on-brand slide templates the client inserts into a deck.
@@ -283,6 +270,7 @@ app.get("/api/decks/:id/pdf", async (c) => {
     theme: row.theme,
     brandHeadHtml: brandHead(tokens),
     brandLogoHtml: brandLogoTag(await resolveLogoForPrint(tokens.logo)),
+    nav: parseNav(row.nav), // print uses only nav.slideNumber (arrows/progress are present-only)
   });
 
   try {

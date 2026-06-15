@@ -14,7 +14,7 @@ import {
   Code2,
   Wand2,
   Palette,
-  X,
+  ArrowLeft,
   Check,
 } from "lucide-react";
 
@@ -174,11 +174,10 @@ export function App() {
   const [brands, setBrands] = useState<{ id: string; name: string; tokens: BrandTokens }[]>([]);
   const [brandId, setBrandId] = useState<string | null>(null);
   const [tokens, setTokens] = useState<BrandTokens | null>(null);
-  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [page, setPage] = useState<"deck" | "brands">("deck");
   const [editorBrandId, setEditorBrandId] = useState<string | null>(null);
 
   const [selEl, setSelEl] = useState<SelEl | null>(null);
-  const [bgOpen, setBgOpen] = useState(false);
   const [bottomTab, setBottomTab] = useState<"prompt" | "code">("prompt");
   const [prompt, setPrompt] = useState("");
   const [genLoading, setGenLoading] = useState(false);
@@ -230,7 +229,7 @@ export function App() {
       const m = e.data || {};
       if (m.source !== "slides-preview") return;
       if (m.type === "slidechanged") { setSel(m.h ?? 0); setSelEl(null); }
-      else if (m.type === "bg-click") setBgOpen(true);
+      else if (m.type === "bg-click") setSelEl(null);
       else if (m.type === "el-select") setSelEl({ sid: m.sid, tag: m.tag, anim: m.anim, text: m.text, isHtml: isHtmlSlide(slidesRef.current[selRef.current] ?? "") });
       else if (m.type === "el-edit") onElEdit(m.sid, m.oldText, m.newText);
       else if (m.type === "img-click") onImgClick(m.sid, m.src);
@@ -258,6 +257,7 @@ export function App() {
     rendered.current = d.content;
     setViewKey((k) => k + 1);
     setDecksOpen(false);
+    setPage("deck");
   }
 
   // ── save ──
@@ -361,6 +361,15 @@ export function App() {
     const rows = await loadDecks();
     if (id === selectedId) rows.length ? selectDeck(rows[0]) : (setSelectedId(null), setSlides([]));
   }
+  // Start a brand-new deck that uses the given brand.
+  async function newDeckWithBrand(id: string) {
+    const created: Deck = await fetch("/api/decks", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Untitled deck", content: joinSlides(STARTER), brand_id: id }),
+    }).then((r) => r.json());
+    setDecks((ds) => [created, ...ds]);
+    selectDeck(created);
+  }
 
   // ── present + export ──
   const present = () => canvasRef.current?.requestFullscreen?.();
@@ -419,7 +428,7 @@ export function App() {
   async function useBrandForDeck(id: string) {
     if (!selectedId) return;
     setBrandId(id);
-    setLibraryOpen(false);
+    setPage("deck");
     setEditorBrandId(null);
     await fetch(`/api/decks/${selectedId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ brand_id: id }) });
     setViewKey((k) => k + 1);
@@ -471,6 +480,9 @@ export function App() {
         )}
         <div className="flex-1" />
         <span className="mr-1 text-xs text-neutral-400">{saving ? "Saving…" : selected ? `${slides.length} slides` : ""}</span>
+        <button onClick={() => setPage(page === "brands" ? "deck" : "brands")} className={`flex h-8 items-center gap-1.5 rounded-md border px-3 text-sm ${page === "brands" ? "border-neutral-900 bg-neutral-900 text-white" : "border-neutral-200 hover:bg-neutral-50"}`}>
+          <Palette size={14} /> Brands
+        </button>
         <button onClick={exportPdf} disabled={!selected || exporting} className="flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 px-3 text-sm hover:bg-neutral-50 disabled:opacity-40">
           {exporting ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />} PDF
         </button>
@@ -479,7 +491,35 @@ export function App() {
         </button>
       </header>
 
-      {selected ? (
+      {page === "brands" ? (
+        editorBrandId ? (
+          <BrandEditor
+            brandId={editorBrandId}
+            active={editorBrandId === activeBrandId}
+            onBack={() => setEditorBrandId(null)}
+            onChanged={loadBrands}
+            onUse={() => newDeckWithBrand(editorBrandId)}
+            onDeleted={async () => { setEditorBrandId(null); const rows = await loadBrands(); if (!rows.find((b) => b.id === brandId)) setBrandId(rows[0]?.id ?? null); setViewKey((k) => k + 1); }}
+          />
+        ) : (
+          <main className="min-h-0 flex-1 overflow-y-auto bg-neutral-50">
+            <div className="mx-auto max-w-5xl px-8 py-8">
+              <div className="mb-6 flex items-center justify-between">
+                <div>
+                  <h1 className="text-xl font-semibold">Brand library</h1>
+                  <p className="text-sm text-neutral-500">Design systems your decks can use. Click one to preview and edit.</p>
+                </div>
+                <button onClick={createBrand} className="flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-2 text-sm font-medium text-white hover:bg-neutral-700"><Plus size={15} /> New brand</button>
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                {brands.map((b) => (
+                  <BrandCard key={b.id} brand={b} active={b.id === activeBrandId} onUse={() => newDeckWithBrand(b.id)} onEdit={() => setEditorBrandId(b.id)} />
+                ))}
+              </div>
+            </div>
+          </main>
+        )
+      ) : selected ? (
         <div className="flex min-h-0 flex-1">
           {/* Pages */}
           <aside className="flex w-48 shrink-0 flex-col border-r border-neutral-200 bg-white">
@@ -516,18 +556,8 @@ export function App() {
 
           {/* canvas + prompt/code */}
           <main className="flex min-w-0 flex-1 flex-col bg-neutral-100">
-            <div className="relative min-h-0 flex-1 p-3">
+            <div className="min-h-0 flex-1 p-3">
               <iframe key={viewKey} ref={canvasRef} src={`/api/decks/${selected.id}/view?h=${sel}&t=${viewKey}`} title="Canvas" allowFullScreen className="h-full w-full rounded-lg border border-neutral-200 bg-white shadow-sm" />
-              {bgOpen && (
-                <div className="absolute left-1/2 top-5 z-20 -translate-x-1/2 rounded-lg border border-neutral-200 bg-white p-2 shadow-xl" onMouseLeave={() => setBgOpen(false)}>
-                  <div className="mb-1.5 px-1 text-[11px] font-medium text-neutral-500">Slide background</div>
-                  <div className="flex items-center gap-2">
-                    <input type="color" value={currentBg} onChange={(e) => changeBg(e.target.value)} className="h-7 w-7 cursor-pointer rounded border border-neutral-200 p-0.5" />
-                    <input value={currentBg} onChange={(e) => changeBg(e.target.value)} className="w-20 rounded border border-neutral-200 px-1.5 py-1 text-xs uppercase outline-none" />
-                    <button onClick={() => { changeBg(null); setBgOpen(false); }} className="rounded px-2 py-1 text-xs text-neutral-500 hover:bg-neutral-100">Use brand</button>
-                  </div>
-                </div>
-              )}
             </div>
             <div className="flex h-44 shrink-0 flex-col border-t border-neutral-200 bg-white">
               <div className="flex items-center gap-1 px-3 pt-2">
@@ -561,46 +591,44 @@ export function App() {
           {/* Design inspector */}
           <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-neutral-200 bg-white">
             <div className="flex items-center gap-2 px-4 py-3 text-sm font-medium"><SlidersHorizontal size={15} /> Design</div>
-            <div className="px-4 pb-3">
-              <button onClick={() => setLibraryOpen(true)} className="flex w-full items-center justify-between rounded-md border border-neutral-200 px-2.5 py-1.5 text-sm hover:bg-neutral-50">
-                <span className="flex items-center gap-2 truncate"><Palette size={14} /> {activeBrandName}</span>
-                <span className="text-xs text-neutral-400">Library</span>
-              </button>
+            <div className="px-4 pb-4">
+              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">Brand</div>
+              <div className="flex items-center gap-2">
+                <select value={activeBrandId ?? ""} onChange={(e) => useBrandForDeck(e.target.value)} className="h-8 flex-1 rounded-md border border-neutral-200 bg-white px-2 text-sm">
+                  {brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+                <button onClick={() => setPage("brands")} title="Brand library" className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-neutral-200 hover:bg-neutral-50"><Palette size={14} /></button>
+              </div>
             </div>
-            {selEl && (
-              <div className="mx-4 mb-4 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Element · {selEl.tag.toLowerCase()}</span>
-                  {selEl.isHtml && <button onClick={deleteSelEl} className="text-neutral-400 hover:text-red-500"><Trash2 size={13} /></button>}
+
+            <div className="px-4 pb-6">
+              {selEl ? (
+                <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Element · {selEl.tag.toLowerCase()}</span>
+                    {selEl.isHtml && <button onClick={deleteSelEl} className="text-neutral-400 hover:text-red-500"><Trash2 size={13} /></button>}
+                  </div>
+                  <SelectRow label="Animate in" value={selEl.anim} options={ANIMS.map((a) => a.l)}
+                    onChange={(l) => setAnim(ANIMS.find((a) => a.l === l)!.v)} valueToLabel={(v) => ANIMS.find((a) => a.v === v)?.l ?? "None"} />
                 </div>
-                <SelectRow label="Animate in" value={selEl.anim} options={ANIMS.map((a) => a.l)}
-                  onChange={(l) => setAnim(ANIMS.find((a) => a.l === l)!.v)} valueToLabel={(v) => ANIMS.find((a) => a.v === v)?.l ?? "None"} />
-              </div>
-            )}
-            {tokens && (
-              <div className="space-y-5 px-4 pb-6">
-                <Group label="Colors">
-                  <ColorRow label="Background" value={tokens.colors.bg} onChange={(v) => patchBrand((t) => ((t.colors.bg = v), t))} />
-                  <ColorRow label="Text" value={tokens.colors.text} onChange={(v) => patchBrand((t) => ((t.colors.text = v), (t.colors.heading = v), t))} />
-                  <ColorRow label="Accent" value={tokens.colors.accent} onChange={(v) => patchBrand((t) => ((t.colors.accent = v), t))} />
-                </Group>
-                <Group label="Typography">
-                  <SelectRow label="Display" value={nameOfFamily(tokens.fonts.heading)} options={FONTS.map((f) => f.name)} onChange={(v) => setFont("heading", v)} />
-                  <SelectRow label="Body" value={nameOfFamily(tokens.fonts.body)} options={FONTS.map((f) => f.name)} onChange={(v) => setFont("body", v)} />
-                  <SliderRow label="Hero" value={tokens.sizes.hero} min={60} max={200} unit="px" onChange={(v) => patchBrand((t) => ((t.sizes.hero = v), t))} />
-                  <SliderRow label="Body" value={tokens.sizes.body} min={18} max={48} unit="px" onChange={(v) => patchBrand((t) => ((t.sizes.body = v), t))} />
-                </Group>
-                <Group label="Shape">
-                  <SliderRow label="Radius" value={radiusPx} min={0} max={32} unit="px" onChange={(v) => patchBrand((t) => ((t.radius = `${v}px`), t))} />
-                </Group>
-                <Group label="Navigation">
-                  <ToggleRow label="Arrows" value={nav.arrows} onChange={(v) => setNavOpt("arrows", v)} />
-                  <ToggleRow label="Progress bar" value={nav.progress} onChange={(v) => setNavOpt("progress", v)} />
-                  <ToggleRow label="Slide numbers" value={nav.slideNumber} onChange={(v) => setNavOpt("slideNumber", v)} />
-                </Group>
-                <button onClick={() => activeBrandId && setEditorBrandId(activeBrandId)} className="block text-xs text-neutral-400 hover:text-neutral-600">Edit DESIGN.md & layout guidelines</button>
-              </div>
-            )}
+              ) : (
+                <div className="space-y-3 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Background</div>
+                  <ColorRow label="Slide color" value={currentBg} onChange={(v) => changeBg(v)} />
+                  <button onClick={() => changeBg(null)} className="text-xs text-neutral-400 hover:text-neutral-600">Reset to brand</button>
+                  <div className="border-t border-neutral-200 pt-3">
+                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">Navigation</div>
+                    <div className="space-y-2">
+                      <ToggleRow label="Arrows" value={nav.arrows} onChange={(v) => setNavOpt("arrows", v)} />
+                      <ToggleRow label="Progress bar" value={nav.progress} onChange={(v) => setNavOpt("progress", v)} />
+                      <ToggleRow label="Page numbers" value={nav.slideNumber} onChange={(v) => setNavOpt("slideNumber", v)} />
+                    </div>
+                    <p className="mt-2 text-[10px] leading-snug text-neutral-400">Arrows &amp; progress bar show only while presenting. Page numbers also appear in the exported PDF.</p>
+                  </div>
+                </div>
+              )}
+              <p className="mt-3 text-[11px] leading-snug text-neutral-400">Click any text or image on the slide to edit it, or the background for slide settings.</p>
+            </div>
           </aside>
         </div>
       ) : (
@@ -612,35 +640,6 @@ export function App() {
         </main>
       )}
 
-      {libraryOpen && (
-        <Overlay onClose={() => setLibraryOpen(false)}>
-          <div className="flex max-h-[82vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
-              <div className="flex items-center gap-2 font-medium"><Palette size={16} /> Brand library</div>
-              <button onClick={() => setLibraryOpen(false)} className="rounded p-1 text-neutral-400 hover:bg-neutral-100"><X size={16} /></button>
-            </div>
-            <div className="grid grid-cols-2 gap-3 overflow-y-auto p-4">
-              {brands.map((b) => (
-                <BrandCard key={b.id} brand={b} active={b.id === activeBrandId} onUse={() => useBrandForDeck(b.id)} onEdit={() => setEditorBrandId(b.id)} />
-              ))}
-              <button onClick={createBrand} className="grid min-h-32 place-items-center rounded-lg border border-dashed border-neutral-300 text-sm text-neutral-500 hover:bg-neutral-50">
-                <span className="flex items-center gap-1.5"><Plus size={15} /> New brand</span>
-              </button>
-            </div>
-          </div>
-        </Overlay>
-      )}
-
-      {editorBrandId && (
-        <BrandEditor
-          brandId={editorBrandId}
-          active={editorBrandId === activeBrandId}
-          onClose={() => setEditorBrandId(null)}
-          onChanged={loadBrands}
-          onUse={() => useBrandForDeck(editorBrandId)}
-          onDeleted={async () => { setEditorBrandId(null); const rows = await loadBrands(); if (!rows.find((b) => b.id === brandId)) setBrandId(rows[0]?.id ?? null); setViewKey((k) => k + 1); }}
-        />
-      )}
     </div>
   );
 }
@@ -663,8 +662,8 @@ function BrandCard({ brand, active, onUse, onEdit }: { brand: { id: string; name
           {[t.colors.bg, t.colors.text, t.colors.accent].map((c, i) => (<span key={i} style={{ background: c }} className="h-3.5 w-3.5 rounded-full border border-neutral-200" />))}
         </div>
         <div className="flex items-center gap-2">
-          {active ? <span className="flex items-center gap-1 text-xs text-green-600"><Check size={12} /> In use</span>
-            : <button onClick={onUse} className="rounded border border-neutral-200 px-2 py-0.5 text-xs hover:bg-neutral-50">Use</button>}
+          {active && <span className="flex items-center gap-1 text-xs text-green-600"><Check size={12} /> In use</span>}
+          <button onClick={onUse} className="rounded border border-neutral-200 px-2 py-0.5 text-xs hover:bg-neutral-50">New deck</button>
           <button onClick={onEdit} className="text-xs text-neutral-500 hover:text-neutral-900">Edit</button>
         </div>
       </div>
@@ -673,23 +672,36 @@ function BrandCard({ brand, active, onUse, onEdit }: { brand: { id: string; name
 }
 
 // ── brand editor (preview + name + prompt + DESIGN.md) ──
-function BrandEditor({ brandId, active, onClose, onChanged, onUse, onDeleted }: {
-  brandId: string; active: boolean; onClose: () => void; onChanged: () => void; onUse: () => void; onDeleted: () => void;
+function BrandEditor({ brandId, active, onBack, onChanged, onUse, onDeleted }: {
+  brandId: string; active: boolean; onBack: () => void; onChanged: () => void; onUse: () => void; onDeleted: () => void;
 }) {
   const [name, setName] = useState("");
   const [md, setMd] = useState("");
+  const [tokens, setTokens] = useState<BrandTokens | null>(null);
   const [instruction, setInstruction] = useState("");
   const [busy, setBusy] = useState(false);
   const [pk, setPk] = useState(0);
-  const [showCode, setShowCode] = useState(false);
+  const tmr = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    fetch(`/api/brands/${brandId}`).then((r) => r.json()).then((b: any) => { setName(b.name); setMd(b.design_md); });
+    fetch(`/api/brands/${brandId}`).then((r) => r.json()).then((b: any) => { setName(b.name); setMd(b.design_md); setTokens(b.tokens); });
   }, [brandId]);
 
-  async function saveMeta(nextName = name, nextMd = md) {
-    await fetch(`/api/brands/${brandId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: nextName, design_md: nextMd }) });
+  async function put(body: any) {
+    const b: any = await fetch(`/api/brands/${brandId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+    if (b.design_md != null) setMd(b.design_md);
+    if (b.tokens) setTokens(b.tokens);
     onChanged(); setPk((k) => k + 1);
+  }
+  function patchTokens(mut: (t: BrandTokens) => BrandTokens) {
+    if (!tokens) return;
+    const next = mut(structuredClone(tokens)); setTokens(next);
+    if (tmr.current) clearTimeout(tmr.current);
+    tmr.current = setTimeout(() => put({ tokens: next }), 300);
+  }
+  function setFont(role: "heading" | "body", n: string) {
+    const f = fontByName(n);
+    patchTokens((t) => { t.fonts[role] = f.family; t.fonts.google = [...new Set([fontByName(nameOfFamily(t.fonts.heading)).google, fontByName(nameOfFamily(t.fonts.body)).google].filter(Boolean))]; return t; });
   }
   async function applyPrompt() {
     if (!instruction.trim() || busy) return;
@@ -698,7 +710,7 @@ function BrandEditor({ brandId, active, onClose, onChanged, onUse, onDeleted }: 
       const res = await fetch(`/api/brands/${brandId}/prompt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instruction }) });
       const b: any = await res.json();
       if (!res.ok) { alert(b.error || "Failed"); return; }
-      setMd(b.design_md); setInstruction(""); onChanged(); setPk((k) => k + 1);
+      setMd(b.design_md); setTokens(b.tokens); setInstruction(""); onChanged(); setPk((k) => k + 1);
     } finally { setBusy(false); }
   }
   async function del() {
@@ -706,47 +718,59 @@ function BrandEditor({ brandId, active, onClose, onChanged, onUse, onDeleted }: 
     await fetch(`/api/brands/${brandId}`, { method: "DELETE" });
     onDeleted();
   }
+  const radiusPx = tokens ? parseInt(tokens.radius) || 0 : 12;
 
   return (
-    <Overlay onClose={onClose}>
-      <div className="flex max-h-[88vh] w-full max-w-4xl overflow-hidden rounded-xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+    <div className="flex min-h-0 flex-1 flex-col bg-white">
+      <div className="flex items-center gap-3 border-b border-neutral-200 px-5 py-2.5">
+        <button onClick={onBack} className="flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-900"><ArrowLeft size={15} /> Library</button>
+        <input value={name} onChange={(e) => setName(e.target.value)} onBlur={() => put({ name })} className="ml-1 w-56 rounded px-2 py-1 text-sm font-medium outline-none hover:bg-neutral-100 focus:bg-neutral-100" placeholder="Brand name" />
+        <div className="flex-1" />
+        {active && <span className="flex items-center gap-1 text-xs text-green-600"><Check size={13} /> In use on current deck</span>}
+        <button onClick={del} className="text-xs text-neutral-400 hover:text-red-500">Delete</button>
+        <button onClick={onUse} className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700">Use for new slides</button>
+      </div>
+      <div className="flex min-h-0 flex-1">
         {/* preview */}
-        <div className="w-1/2 shrink-0 border-r border-neutral-200 bg-neutral-100 p-3">
-          <iframe key={pk} src={`/api/brands/${brandId}/preview?t=${pk}`} title="Brand preview" className="h-full min-h-[420px] w-full rounded-lg border border-neutral-200 bg-white" />
+        <div className="min-h-0 flex-1 bg-neutral-100 p-4">
+          <iframe key={pk} src={`/api/brands/${brandId}/preview?t=${pk}`} title="Brand preview" className="h-full w-full rounded-lg border border-neutral-200 bg-white" />
         </div>
         {/* controls */}
-        <div className="flex w-1/2 flex-col">
-          <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
-            <input value={name} onChange={(e) => setName(e.target.value)} onBlur={() => saveMeta()} className="w-full text-sm font-medium outline-none" placeholder="Brand name" />
-            <button onClick={onClose} className="rounded p-1 text-neutral-400 hover:bg-neutral-100"><X size={16} /></button>
-          </div>
-          <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
-            <div>
-              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">Refine by prompt</div>
-              <textarea value={instruction} onChange={(e) => setInstruction(e.target.value)} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") applyPrompt(); }}
-                placeholder="e.g. “make it darker and more playful, use a serif display font”" className="h-16 w-full resize-none rounded-md border border-neutral-200 p-2 text-sm outline-none focus:border-neutral-400" />
-              <button onClick={applyPrompt} disabled={busy || !instruction.trim()} className="mt-1.5 flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-40">
-                {busy ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />} Apply
-              </button>
+        <div className="flex w-80 shrink-0 flex-col overflow-y-auto border-l border-neutral-200">
+          {tokens && (
+            <div className="space-y-5 p-4">
+              <Group label="Colors">
+                <ColorRow label="Background" value={tokens.colors.bg} onChange={(v) => patchTokens((t) => ((t.colors.bg = v), t))} />
+                <ColorRow label="Text" value={tokens.colors.text} onChange={(v) => patchTokens((t) => ((t.colors.text = v), (t.colors.heading = v), t))} />
+                <ColorRow label="Accent" value={tokens.colors.accent} onChange={(v) => patchTokens((t) => ((t.colors.accent = v), t))} />
+              </Group>
+              <Group label="Typography">
+                <SelectRow label="Display" value={nameOfFamily(tokens.fonts.heading)} options={FONTS.map((f) => f.name)} onChange={(v) => setFont("heading", v)} />
+                <SelectRow label="Body" value={nameOfFamily(tokens.fonts.body)} options={FONTS.map((f) => f.name)} onChange={(v) => setFont("body", v)} />
+                <SliderRow label="Hero" value={tokens.sizes.hero} min={60} max={200} unit="px" onChange={(v) => patchTokens((t) => ((t.sizes.hero = v), t))} />
+                <SliderRow label="Body" value={tokens.sizes.body} min={18} max={48} unit="px" onChange={(v) => patchTokens((t) => ((t.sizes.body = v), t))} />
+              </Group>
+              <Group label="Shape">
+                <SliderRow label="Radius" value={radiusPx} min={0} max={32} unit="px" onChange={(v) => patchTokens((t) => ((t.radius = `${v}px`), t))} />
+              </Group>
+              <div>
+                <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">Refine by prompt</div>
+                <textarea value={instruction} onChange={(e) => setInstruction(e.target.value)} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") applyPrompt(); }}
+                  placeholder="e.g. “darker and more playful, serif display font”" className="h-16 w-full resize-none rounded-md border border-neutral-200 p-2 text-sm outline-none focus:border-neutral-400" />
+                <button onClick={applyPrompt} disabled={busy || !instruction.trim()} className="mt-1.5 flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-40">
+                  {busy ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />} Apply
+                </button>
+              </div>
+              <div>
+                <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-400"><Code2 size={12} /> DESIGN.md</div>
+                <textarea value={md} onChange={(e) => setMd(e.target.value)} onBlur={() => put({ design_md: md })} spellCheck={false} className="h-64 w-full resize-none rounded-md border border-neutral-200 p-2 font-mono text-[11px] leading-relaxed outline-none focus:border-neutral-400" />
+              </div>
             </div>
-            <button onClick={() => setShowCode((s) => !s)} className="flex items-center gap-1.5 self-start text-xs text-neutral-400 hover:text-neutral-600"><Code2 size={12} /> {showCode ? "Hide" : "Edit"} DESIGN.md & layout guidelines</button>
-            {showCode && (
-              <textarea value={md} onChange={(e) => setMd(e.target.value)} onBlur={() => saveMeta()} spellCheck={false} className="h-56 w-full resize-none rounded-md border border-neutral-200 p-2 font-mono text-[11.5px] leading-relaxed outline-none" />
-            )}
-          </div>
-          <div className="flex items-center justify-between border-t border-neutral-200 px-4 py-3">
-            <button onClick={del} className="text-xs text-neutral-400 hover:text-red-500">Delete</button>
-            {active ? <span className="flex items-center gap-1 text-xs text-green-600"><Check size={13} /> In use on this deck</span>
-              : <button onClick={onUse} className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700">Use for this deck</button>}
-          </div>
+          )}
         </div>
       </div>
-    </Overlay>
+    </div>
   );
-}
-
-function Overlay({ onClose, children }: { onClose: () => void; children: React.ReactNode }) {
-  return <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-6" onClick={onClose}>{children}</div>;
 }
 
 // ── helpers ──
