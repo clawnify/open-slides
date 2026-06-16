@@ -9,14 +9,17 @@
 export interface BrandTokens {
   colors: { bg: string; text: string; heading: string; accent: string; muted: string };
   fonts: { heading: string; body: string; mono: string; google: string[] };
-  sizes: { hero: number; body: number }; // px — Hero (title) + Body text scale
+  sizes: { heading: number; subheading: number; body: number }; // px (12–100), 16:9 canvas
   radius: string;
   logo: string; // "assets/<key>" or a URL, or "" for none
   logoPosition: LogoPosition; // which corner the logo overlay sits in
+  textAlign: TextAlign; // horizontal alignment of slide content, deck-wide
 }
 
 export type LogoPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 const LOGO_POSITIONS: LogoPosition[] = ["top-left", "top-right", "bottom-left", "bottom-right"];
+export type TextAlign = "left" | "center";
+const TEXT_ALIGNS: TextAlign[] = ["left", "center"];
 
 const DEFAULTS: BrandTokens = {
   colors: { bg: "#FFFFFF", text: "#1A1814", heading: "#111111", accent: "#6D4CFF", muted: "#6F6A63" },
@@ -26,10 +29,11 @@ const DEFAULTS: BrandTokens = {
     mono: "ui-monospace, SFMono-Regular, Menlo, monospace",
     google: [],
   },
-  sizes: { hero: 96, body: 34 },
+  sizes: { heading: 72, subheading: 44, body: 24 },
   radius: "14px",
   logo: "",
   logoPosition: "bottom-right",
+  textAlign: "left",
 };
 
 export const DEFAULT_BRAND_MD = `# Brand design system
@@ -79,11 +83,14 @@ stack walks the system UI fonts. Cal-style modern-SaaS pairing by default
 ### Hierarchy
 | Role | Size | Weight | Use |
 |---|---|---|---|
-| Hero | hero token | 700 | The single biggest headline on a title or section slide |
-| Title | ~0.6x hero | 700 | A content-slide headline |
+| Heading | heading token | 700 | The biggest headline on a title or section slide (h1) |
+| Subheading | subheading token | 700 | A content-slide headline (h2) |
 | Kicker | ~18-24px | 600, uppercase, tracked | The small accent eyebrow above a headline |
-| Body | body token | 400 | Supporting lines, bullets, captions |
-| Stat | ~1.8x hero | 700, accent | A single big number |
+| Paragraph | body token | 400 | Supporting lines, bullets, captions |
+| Stat | ~1.8x heading | 700, accent | A single big number |
+
+Each of the three sizes (heading, subheading, paragraph) is configurable from 12
+to 100px. Plain h1/h2/p inherit them, so you rarely set a size by hand.
 
 ### Principles
 - One headline per slide. Tight, slightly negative tracking on display sizes.
@@ -121,6 +128,38 @@ scale. Full-bleed images and color-block backgrounds do the heavy lifting.
 - **Chart** — a title + one chart (see Data & charts). One chart per slide.
 - **Image + text** — a full-height image beside a kicker + headline + line.
 - **Full-bleed image** — a photo background with a short caption bottom-left.
+
+## Example slides
+Three slides that show the system in practice. Each fills the 1280×720 canvas,
+styles with the brand variables, and omits alignment so it inherits the brand's
+default (override per slide only when a layout needs it).
+
+### Title
+\`\`\`html
+<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:0 9%;box-sizing:border-box">
+  <span class="kicker">Product launch</span>
+  <h1 style="color:var(--brand-heading);margin:14px 0 0">The future of focus</h1>
+  <p style="color:var(--brand-muted);max-width:60%;margin-top:18px">One workspace that thinks with you.</p>
+</div>
+\`\`\`
+
+### Big stat
+\`\`\`html
+<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:0 9%;box-sizing:border-box">
+  <span class="kicker">Impact</span>
+  <div style="font:700 calc(var(--brand-heading-size) * 1.8)/1 var(--r-heading-font);color:var(--brand-accent);margin-top:6px">3.2×</div>
+  <p style="color:var(--brand-muted);max-width:55%;margin-top:12px">faster review cycles after the first month.</p>
+</div>
+\`\`\`
+
+### Chart
+\`\`\`html
+<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:0 9%;box-sizing:border-box">
+  <span class="kicker">Growth</span>
+  <h2 style="color:var(--brand-heading);margin:8px 0 0">Revenue more than doubled</h2>
+  <div class="chart" style="flex:1;min-height:0;max-height:380px;margin-top:24px" data-chart='{"type":"bar","labels":["Q1","Q2","Q3","Q4"],"data":[12,19,22,31]}'></div>
+</div>
+\`\`\`
 
 ## Data & charts
 Show data with a chart element, never a screenshot of one. Charts render as
@@ -172,10 +211,11 @@ or by prompting.
     "mono": "JetBrains Mono",
     "google": ["Space+Grotesk:wght@500;700", "Inter:wght@400;500;600", "JetBrains+Mono:wght@400"]
   },
-  "sizes": { "hero": 96, "body": 32 },
+  "sizes": { "heading": 72, "subheading": 44, "body": 24 },
   "radius": "14px",
   "logo": "",
-  "logoPosition": "bottom-right"
+  "logoPosition": "bottom-right",
+  "textAlign": "left"
 }
 \`\`\`
 `;
@@ -186,13 +226,24 @@ export function parseTokens(designMd: string): BrandTokens {
   if (!m) return DEFAULTS;
   try {
     const raw = JSON.parse(m[1]);
+    const s = raw.sizes || {};
+    const sz = (v: unknown, d: number) => {
+      const n = Math.round(Number(v));
+      return Number.isFinite(n) ? Math.max(12, Math.min(100, n)) : d; // clamp to 12–100
+    };
     return {
       colors: { ...DEFAULTS.colors, ...(raw.colors || {}) },
       fonts: { ...DEFAULTS.fonts, ...(raw.fonts || {}) },
-      sizes: { ...DEFAULTS.sizes, ...(raw.sizes || {}) },
+      sizes: {
+        // Accept the legacy {hero,body} shape: hero → heading, derive subheading.
+        heading: sz(s.heading ?? s.hero, DEFAULTS.sizes.heading),
+        subheading: sz(s.subheading ?? (s.hero != null ? Number(s.hero) * 0.6 : undefined), DEFAULTS.sizes.subheading),
+        body: sz(s.body, DEFAULTS.sizes.body),
+      },
       radius: raw.radius || DEFAULTS.radius,
       logo: typeof raw.logo === "string" ? raw.logo : "",
       logoPosition: LOGO_POSITIONS.includes(raw.logoPosition) ? raw.logoPosition : DEFAULTS.logoPosition,
+      textAlign: TEXT_ALIGNS.includes(raw.textAlign) ? raw.textAlign : DEFAULTS.textAlign,
     };
   } catch {
     return DEFAULTS;
@@ -252,15 +303,19 @@ export function brandHead(tokens: BrandTokens): string {
     --r-heading-font: ${fontStack(tokens.fonts.heading, "sans")};
     --r-code-font: ${fontStack(tokens.fonts.mono, "mono")};
     --r-main-font-size: ${Math.round(tokens.sizes.body)}px;
-    --r-heading1-size: ${Math.round(tokens.sizes.hero)}px;
-    --brand-hero-size: ${Math.round(tokens.sizes.hero)}px;
+    --r-heading1-size: ${Math.round(tokens.sizes.heading)}px;
+    --brand-heading-size: ${Math.round(tokens.sizes.heading)}px;
+    --brand-subheading-size: ${Math.round(tokens.sizes.subheading)}px;
     --brand-body-size: ${Math.round(tokens.sizes.body)}px;
+    --brand-hero-size: ${Math.round(tokens.sizes.heading)}px; /* legacy alias of heading */
     --brand-bg: ${css(c.bg)};
     --brand-text: ${css(c.text)};
     --brand-heading: ${css(c.heading)};
     --brand-accent: ${css(c.accent)};
     --brand-muted: ${css(c.muted)};
     --brand-radius: ${css(tokens.radius)};
+    --brand-align: ${tokens.textAlign === "center" ? "center" : "left"};
+    --brand-justify: ${tokens.textAlign === "center" ? "center" : "flex-start"};
   }
   .reveal .muted { color: var(--brand-muted); }
   .reveal .accent { color: var(--brand-accent); }
@@ -288,6 +343,15 @@ const fontName = (f: string) => (f.split(",")[0] || "System").replace(/['"]/g, "
  */
 export function brandGuideHtml(name: string, tokens: BrandTokens, logoSrc = ""): string {
   const c = tokens.colors;
+  // The example slide is a scaled-down 1280-wide canvas, so size its title/body
+  // in container units derived from the px tokens (1 canvas px = 100/1280 cqw of
+  // the slide's width). This makes the Hero/Body sliders visibly change the
+  // preview, proportionally, instead of being ignored by fixed clamp() sizes.
+  const headingCqw = (tokens.sizes.heading / 1280 * 100).toFixed(2);
+  const bodyCqw = (tokens.sizes.body / 1280 * 100).toFixed(2);
+  const headingPx = Math.round(tokens.sizes.heading);
+  const subPx = Math.round(tokens.sizes.subheading);
+  const bodyPx = Math.round(tokens.sizes.body);
   const swatch = (label: string, hex: string) =>
     `<div class="sw"><div class="chip" style="background:${css(hex)}"></div><div class="meta">${esc(label)}<div class="hex">${esc(hex)}</div></div></div>`;
   const lp = tokens.logoPosition;
@@ -306,19 +370,20 @@ ${brandHead(tokens)}
   h1.name{font:700 36px/1 var(--r-heading-font);color:#111;margin:8px 0 26px;letter-spacing:-1px}
   .sec{margin:26px 0}
   .sec h2{font:600 11px/1 var(--r-main-font);letter-spacing:.12em;text-transform:uppercase;color:#9a9a9a;margin:0 0 12px}
-  .slide{position:relative;aspect-ratio:16/9;border-radius:14px;overflow:hidden;border:1px solid #eee;background:var(--brand-bg);padding:7% 8%;display:flex;flex-direction:column;justify-content:center}
+  .slide{position:relative;container-type:inline-size;aspect-ratio:16/9;border-radius:14px;overflow:hidden;border:1px solid #eee;background:var(--brand-bg);padding:7% 8%;display:flex;flex-direction:column;justify-content:center;align-items:var(--brand-justify,flex-start);text-align:var(--brand-align,left)}
   .slide .logo{position:absolute;height:24px;opacity:.9}
   .logobox{display:inline-flex;align-items:center;justify-content:center;padding:22px 26px;border:1px solid #eee;border-radius:12px;background:var(--brand-bg)}
   .logobox .logo{height:40px;max-width:240px;object-fit:contain}
   .slide .k{font:600 13px/1 var(--r-heading-font);letter-spacing:.16em;text-transform:uppercase;color:var(--brand-accent)}
-  .slide h3{font:700 clamp(28px,5vw,52px)/1.04 var(--r-heading-font);color:var(--brand-heading);margin:8px 0 0;letter-spacing:-1px}
-  .slide p{font:400 clamp(14px,1.8vw,20px)/1.4 var(--r-main-font);color:var(--brand-muted);margin:12px 0 0;max-width:72%}
+  .slide h3{font:700 ${headingCqw}cqw/1.04 var(--r-heading-font);color:var(--brand-heading);margin:8px 0 0;letter-spacing:-1px}
+  .slide p{font:400 ${bodyCqw}cqw/1.4 var(--r-main-font);color:var(--brand-muted);margin:12px 0 0;max-width:72%}
   .swatches{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
   .sw{border:1px solid #eee;border-radius:10px;overflow:hidden}
   .sw .chip{height:44px}
   .sw .meta{padding:6px 8px;font:500 11px/1.3 var(--r-main-font);color:#333}
   .sw .hex{color:#9a9a9a;text-transform:uppercase;font-size:9px}
   .row{padding:12px 0;border-bottom:1px solid #f1f1f1}
+  .row .spec{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .lbl{font:500 10px/1 var(--r-main-font);color:#9a9a9a;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px}
 </style></head><body><div class="wrap">
   <div class="kicker">Brand guidelines</div>
@@ -336,10 +401,12 @@ ${brandHead(tokens)}
   </div>
 
   <div class="sec"><h2>Typography</h2>
-    <div class="row"><div class="lbl">Display · ${esc(fontName(tokens.fonts.heading))} · ${Math.round(tokens.sizes.hero)}px</div>
-      <div style="font:700 48px/1 var(--r-heading-font);color:var(--brand-heading);letter-spacing:-1px">Aa Bb Cc</div></div>
-    <div class="row"><div class="lbl">Body · ${esc(fontName(tokens.fonts.body))} · ${Math.round(tokens.sizes.body)}px</div>
-      <div style="font:400 18px/1.5 var(--r-main-font);color:var(--brand-text)">The quick brown fox jumps over the lazy dog.</div></div>
+    <div class="row"><div class="lbl">Heading · ${esc(fontName(tokens.fonts.heading))} · ${headingPx}px</div>
+      <div class="spec" style="font:700 ${headingPx}px/1 var(--r-heading-font);color:var(--brand-heading);letter-spacing:-1px">Aa Bb Cc</div></div>
+    <div class="row"><div class="lbl">Subheading · ${esc(fontName(tokens.fonts.heading))} · ${subPx}px</div>
+      <div class="spec" style="font:700 ${subPx}px/1.1 var(--r-heading-font);color:var(--brand-heading);letter-spacing:-0.5px">Aa Bb Cc</div></div>
+    <div class="row"><div class="lbl">Paragraph · ${esc(fontName(tokens.fonts.body))} · ${bodyPx}px</div>
+      <div class="spec" style="font:400 ${bodyPx}px/1.5 var(--r-main-font);color:var(--brand-text)">The quick brown fox jumps over the lazy dog.</div></div>
   </div>
 </div></body></html>`;
 }

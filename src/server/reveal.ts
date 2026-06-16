@@ -108,7 +108,12 @@ interface DocOpts {
   v?: number;
   only?: number; // render just this slide (for Pages thumbnails)
   thumb?: boolean; // chrome-less, non-interactive (thumbnail)
-  nav?: { arrows: boolean; progress: boolean; slideNumber: boolean };
+  // Pagination is a single mutually-exclusive mode:
+  //   dots    — centered dots paginator (present-only)
+  //   arrows  — arrow controls + progress bar (present-only)
+  //   numbers — page numbers c/t (shown in editor, present, and PDF)
+  //   none    — no pagination chrome
+  nav?: { mode: "dots" | "arrows" | "numbers" | "none" };
 }
 
 // Deterministic PDF document: every slide is a fixed 1280x720 page block, content
@@ -118,7 +123,7 @@ interface DocOpts {
 // speaker-notes. Here there is no scaling: slides are authored at 1280x720 and
 // printed as-is. preferCSSPageSize + the @page rule give exact 16:9 pages.
 function buildPrintDoc(opts: DocOpts): string {
-  const showNum = !!(opts.nav && opts.nav.slideNumber);
+  const showNum = opts.nav?.mode === "numbers";
   const chunks = splitSlides(opts.content);
   const total = chunks.length;
   const clean = (s: string) => s.replace(/["<>]/g, "");
@@ -150,8 +155,18 @@ function buildPrintDoc(opts: DocOpts): string {
   body{ background: var(--brand-bg, #fff); color: var(--r-main-color, #111); font-family: var(--r-main-font, -apple-system, sans-serif); }
   /* One fixed-size page per slide; content (often position:absolute;inset:0) fills it. */
   .pdf-slide{ position: relative; width: 1280px; height: 720px; overflow: hidden; box-sizing: border-box; background: var(--brand-bg, #fff); break-after: page; page-break-after: always; }
+  /* Brand defaults (a guideline, not forced): alignment + type scale. Inline
+     per-slide styles win, so a slide can deviate. */
+  .pdf-slide > div{ text-align: var(--brand-align, left); align-items: var(--brand-justify, flex-start); }
+  .pdf-slide h1{ font-size: var(--brand-heading-size); }
+  .pdf-slide h2{ font-size: var(--brand-subheading-size); }
+  .pdf-slide h3{ font-size: calc(var(--brand-subheading-size) * 0.82); }
+  .pdf-slide :is(p, li, blockquote, td, th, figcaption){ font-size: var(--brand-body-size); }
   .pdf-slide:last-child{ break-after: auto; page-break-after: avoid; }
   .pdf-num{ position: absolute; bottom: 22px; right: 28px; font: 500 18px/1 var(--r-main-font); color: var(--brand-muted, #999); }
+  /* Speaker notes are presenter-only; never print them (reveal hides them in the
+     editor/view, but this doc doesn't load reveal core CSS). */
+  aside.notes, .notes{ display: none !important; }
   /* Brand helpers are scoped to .reveal in brandHead; redeclare unscoped here. */
   .muted{ color: var(--brand-muted); }
   .accent{ color: var(--brand-accent); }
@@ -191,7 +206,8 @@ export function revealDoc(opts: DocOpts): string {
            minScale: 0.05, maxScale: 1,
          }).then(function () { renderCharts(document); });`
       : `var params = new URLSearchParams(location.search);
-         var NAV = { arrows: ${opts.nav ? opts.nav.arrows : true}, progress: ${opts.nav ? opts.nav.progress : true} };
+         var NAV_MODE = ${JSON.stringify(opts.nav?.mode ?? "dots")};
+         var NAV = { arrows: NAV_MODE === 'arrows', progress: NAV_MODE === 'arrows', dots: NAV_MODE === 'dots' };
          Reveal.initialize({
            plugins: [RevealHighlight, RevealNotes],
            ${SIZING}
@@ -200,7 +216,7 @@ export function revealDoc(opts: DocOpts): string {
            controls: false,
            progress: false,
            hash: false,
-           slideNumber: ${opts.nav && !opts.nav.slideNumber ? "false" : "'c/t'"},
+           slideNumber: ${opts.nav?.mode === "numbers" ? "'c/t'" : "false"},
            transition: 'slide',
          }).then(function () {
            var h = parseInt(params.get('h') || '0', 10) || 0;
@@ -209,20 +225,51 @@ export function revealDoc(opts: DocOpts): string {
            // Present mode = fullscreen. Only then do fragment animations play and
            // the arrows + progress bar appear; in the editor canvas everything is
            // visible and chrome-free, and clicks edit rather than navigate.
-           function presenting() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+           // The parent fullscreens the IFRAME ELEMENT, so document.fullscreenElement
+           // is null inside this document — the parent tells us via a 'present'
+           // message instead. We OR in the local check for a standalone fullscreen.
+           var presentFlag = false;
+           function presenting() { return presentFlag || !!(document.fullscreenElement || document.webkitFullscreenElement); }
            function syncPresentMode() {
              var p = presenting();
              Reveal.configure({ fragments: p, controls: p && NAV.arrows, progress: p && NAV.progress });
+             if (dotsEl) dotsEl.style.display = (p && NAV.dots) ? 'flex' : 'none';
            }
+           // Centered dots paginator: one dot per slide, click to jump. Built
+           // once, refreshed on slide add/remove, active dot tracks the position.
+           var dotsEl = document.createElement('div');
+           dotsEl.className = 'sv-dots';
+           (document.querySelector('.reveal') || document.body).appendChild(dotsEl);
+           dotsEl.addEventListener('click', function (e) {
+             var i = e.target && e.target.getAttribute && e.target.getAttribute('data-i');
+             if (i != null) try { Reveal.slide(parseInt(i, 10)); } catch (_) {}
+           });
+           function buildDots() {
+             var n = Reveal.getHorizontalSlides().length;
+             var html = '';
+             for (var i = 0; i < n; i++) html += '<button class="sv-dot" data-i="' + i + '" aria-label="Go to slide ' + (i + 1) + '"></button>';
+             dotsEl.innerHTML = html;
+             updateDots();
+           }
+           function updateDots() {
+             var h = Reveal.getIndices().h, dots = dotsEl.children;
+             for (var i = 0; i < dots.length; i++) dots[i].className = 'sv-dot' + (i === h ? ' on' : '');
+           }
+           buildDots();
            document.addEventListener('fullscreenchange', syncPresentMode);
            document.addEventListener('webkitfullscreenchange', syncPresentMode);
            renderCharts(Reveal.getCurrentSlide());
            Reveal.on('slidechanged', function (e) { renderCharts(e.currentSlide); });
+           Reveal.on('slidechanged', updateDots);
            Reveal.on('slidechanged', report);
            addEventListener('message', function (e) {
              var m = e.data || {};
-             if (m && m.target === 'slides-view' && m.type === 'goto') {
+             if (!m || m.target !== 'slides-view') return;
+             if (m.type === 'goto') {
                try { Reveal.slide(m.h || 0, m.v || 0); } catch (_) {}
+             } else if (m.type === 'present') {
+               presentFlag = !!m.on;
+               syncPresentMode();
              }
            });
            // Tag editable elements of the active slide with a stable index so
@@ -313,8 +360,25 @@ export function revealDoc(opts: DocOpts): string {
      stop matching and the slide would collapse and overflow onto the next PDF
      page. height:100% resolves against the slides box (screen) and the sized
      pdf-page (print), so each slide fills exactly one page. */
-  .reveal .slides { text-align: left; }
+  .reveal .slides { text-align: var(--brand-align, left); }
   .reveal .slides section { height: 100%; box-sizing: border-box; }
+  /* Brand DEFAULTS (a guideline, not forced): alignment + type scale come from
+     the brand, but any slide can override by setting its own inline style — e.g.
+     a left-aligned data slide while the brand default is centered. No !important,
+     so inline per-slide styles win. */
+  .reveal .slides section.design > div { text-align: var(--brand-align, left); align-items: var(--brand-justify, flex-start); }
+  .reveal .slides section.design h1 { font-size: var(--brand-heading-size); }
+  .reveal .slides section.design h2 { font-size: var(--brand-subheading-size); }
+  .reveal .slides section.design h3 { font-size: calc(var(--brand-subheading-size) * 0.82); }
+  .reveal .slides section.design :is(p, li, blockquote, td, th, figcaption) { font-size: var(--brand-body-size); }
+  /* Centered dots paginator — present-only, on-brand. Shown via JS only while
+     presenting (like the arrows + progress bar); hidden in the editor and PDF. */
+  .sv-dots{ position: fixed; left: 0; right: 0; bottom: 26px; z-index: 40;
+    display: none; justify-content: center; align-items: center; gap: 12px; padding: 0; }
+  .sv-dots .sv-dot{ width: 9px; height: 9px; padding: 0; border: 0; border-radius: 999px;
+    background: var(--brand-muted, #999); opacity: .35; cursor: pointer; transition: opacity .2s, transform .2s, background .2s; }
+  .sv-dots .sv-dot:hover{ opacity: .7; }
+  .sv-dots .sv-dot.on{ background: var(--brand-accent, #fff); opacity: 1; transform: scale(1.35); }
 </style>
 ${opts.brandHeadHtml}
 </head><body>

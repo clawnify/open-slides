@@ -123,20 +123,44 @@ function setSlideBg(chunk: string, color: string | null): string {
   return `${comment}\n${chunk}`;
 }
 
+// Speaker notes live inside the slide as <aside class="notes">…</aside> — hidden
+// on the slide and in the PDF, shown in the presenter view, and read/written by
+// the AI. They're the per-slide store of intent.
+function getNotes(chunk: string): string {
+  const { body } = parseHtmlSlide(chunk);
+  const doc = new DOMParser().parseFromString(`<body>${body}</body>`, "text/html");
+  const a = doc.querySelector("aside.notes");
+  return a ? (a.textContent || "").trim() : "";
+}
+function setNotes(chunk: string, notes: string): string {
+  const { attrs, body } = parseHtmlSlide(chunk);
+  return buildHtmlSlide(attrs, withBody(body, (r) => {
+    let a = r.querySelector("aside.notes");
+    if (!notes.trim()) { a?.remove(); return; }
+    if (!a) { a = r.ownerDocument.createElement("aside"); a.className = "notes"; r.appendChild(a); }
+    a.textContent = notes;
+  }));
+}
+
 // ── brand tokens ─────────────────────────────────────────────────────
 interface BrandTokens {
   colors: { bg: string; text: string; heading: string; accent: string; muted: string };
   fonts: { heading: string; body: string; mono: string; google: string[] };
-  sizes: { hero: number; body: number };
+  sizes: { heading: number; subheading: number; body: number };
   radius: string;
   logo: string;
   logoPosition: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  textAlign: "left" | "center";
 }
 const LOGO_POSITIONS = [
   { v: "top-left", l: "Top left" },
   { v: "top-right", l: "Top right" },
   { v: "bottom-left", l: "Bottom left" },
   { v: "bottom-right", l: "Bottom right" },
+] as const;
+const TEXT_ALIGNS = [
+  { v: "left", l: "Left" },
+  { v: "center", l: "Center" },
 ] as const;
 const SYSTEM_SANS = "-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
 const FONTS = [
@@ -166,18 +190,39 @@ const ANIMS = [
 interface Deck { id: string; title: string; content: string; nav: string; updated_at: string }
 interface Asset { id: string; key: string; name: string; content_type: string }
 interface SlideTemplate { id: string; name: string; body: string }
-interface Nav { arrows: boolean; progress: boolean; slideNumber: boolean }
+type NavMode = "dots" | "arrows" | "numbers" | "none";
+interface Nav { mode: NavMode }
+const DEFAULT_NAV: Nav = { mode: "dots" };
+const NAV_MODES: { v: NavMode; l: string }[] = [
+  { v: "dots", l: "Dots (centered)" },
+  { v: "arrows", l: "Arrows + progress bar" },
+  { v: "numbers", l: "Page numbers" },
+  { v: "none", l: "None" },
+];
+// Read the stored nav, collapsing the legacy {arrows,progress,…} shape to a mode.
+function parseNavMode(s: string | undefined): Nav {
+  try {
+    const o = s ? JSON.parse(s) : {};
+    if (typeof o.mode === "string" && NAV_MODES.some((m) => m.v === o.mode)) return { mode: o.mode };
+    if (o.dots) return { mode: "dots" };
+    if (o.arrows || o.progress) return { mode: "arrows" };
+    if (o.slideNumber) return { mode: "numbers" };
+    if (Object.keys(o).length) return { mode: "none" };
+  } catch { /* fall through */ }
+  return { ...DEFAULT_NAV };
+}
 interface SelEl { sid: number; tag: string; anim: string; text: string }
 
 // A designed (HTML) slide wrapper using the brand CSS variables. Slides are
-// always HTML — markdown is not supported.
+// always HTML — markdown is not supported. No text-align / align-items: the
+// slide inherits the brand's alignment by default (overridable per slide).
 const designedSlide = (inner: string) =>
-  `<!-- html -->\n<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;text-align:left;padding:0 9%;box-sizing:border-box">\n${inner}\n</div>`;
+  `<!-- html -->\n<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:0 9%;box-sizing:border-box">\n${inner}\n</div>`;
 const BLANK_SLIDE = designedSlide(
-  `  <h2 style="font:700 60px/1.05 var(--r-heading-font);margin:0;color:var(--brand-heading)">New slide</h2>\n  <p style="font:400 var(--brand-body-size)/1.5 var(--r-main-font);color:var(--brand-text);margin-top:18px;max-width:80%">Click to edit, or use the prompt below.</p>`,
+  `  <h2 style="font:700 var(--brand-subheading-size)/1.05 var(--r-heading-font);margin:0;color:var(--brand-heading)">New slide</h2>\n  <p style="font:400 var(--brand-body-size)/1.5 var(--r-main-font);color:var(--brand-text);margin-top:18px;max-width:80%">Click to edit, or use the prompt below.</p>`,
 );
 const FALLBACK_STARTER = designedSlide(
-  `  <div class="kicker" style="font-size:24px">Your kicker</div>\n  <h1 style="font:700 var(--brand-hero-size)/1.02 var(--r-heading-font);margin:14px 0 0;color:var(--brand-heading)">Your presentation</h1>\n  <p style="font:400 var(--brand-body-size)/1.4 var(--r-main-font);color:var(--brand-muted);max-width:72%;margin-top:18px">A supporting subtitle that sets the scene in one clear line.</p>`,
+  `  <div class="kicker" style="font-size:24px">Your kicker</div>\n  <h1 style="font:700 var(--brand-heading-size)/1.02 var(--r-heading-font);margin:14px 0 0;color:var(--brand-heading)">Your presentation</h1>\n  <p style="font:400 var(--brand-body-size)/1.4 var(--r-main-font);color:var(--brand-muted);max-width:72%;margin-top:18px">A supporting subtitle that sets the scene in one clear line.</p>`,
 );
 
 export function App() {
@@ -188,7 +233,7 @@ export function App() {
   const [title, setTitle] = useState("");
   const [slides, setSlides] = useState<string[]>([]);
   const [sel, setSel] = useState(0);
-  const [nav, setNav] = useState<Nav>({ arrows: true, progress: true, slideNumber: true });
+  const [nav, setNav] = useState<Nav>({ ...DEFAULT_NAV });
 
   // brand library
   const [brands, setBrands] = useState<{ id: string; name: string; tokens: BrandTokens }[]>([]);
@@ -201,6 +246,7 @@ export function App() {
   const [bottomTab, setBottomTab] = useState<"prompt" | "code">("prompt");
   const [prompt, setPrompt] = useState("");
   const [genLoading, setGenLoading] = useState(false);
+  const [noteDraft, setNoteDraft] = useState("");
 
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -283,7 +329,7 @@ export function App() {
     setSel(0);
     selRef.current = 0; // keep the canvasSrc memo from restoring the prior deck's slide
     setSelEl(null);
-    try { setNav({ arrows: true, progress: true, slideNumber: true, ...JSON.parse(d.nav || "{}") }); } catch { /* default */ }
+    setNav(parseNavMode(d.nav));
     rendered.current = d.content;
     setViewKey((k) => k + 1);
     setDecksOpen(false);
@@ -291,11 +337,13 @@ export function App() {
   }
 
   // ── save ──
-  function scheduleSave(next: string[], t = title, n = nav) {
+  // `quiet` persists without reloading the canvas — used for speaker-notes edits,
+  // which change the document but not the rendered slide.
+  function scheduleSave(next: string[], t = title, n = nav, quiet = false) {
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => save(next, t, n), 500);
+    saveTimer.current = setTimeout(() => save(next, t, n, quiet), 500);
   }
-  async function save(next = slides, t = title, n = nav) {
+  async function save(next = slides, t = title, n = nav, quiet = false) {
     if (!selectedId) return;
     const body = { title: t, content: joinSlides(next), nav: JSON.stringify(n) };
     setSaving(true);
@@ -304,7 +352,10 @@ export function App() {
     }).then((r) => r.json());
     setDecks((ds) => ds.map((d) => (d.id === up.id ? up : d)));
     setSaving(false);
-    if (body.content !== rendered.current) { rendered.current = body.content; setViewKey((k) => k + 1); }
+    if (body.content !== rendered.current) {
+      rendered.current = body.content;
+      if (!quiet) setViewKey((k) => k + 1);
+    }
   }
   function applyToSlide(i: number, fn: (c: string) => string) {
     const next = slides.slice();
@@ -414,7 +465,23 @@ export function App() {
   }
 
   // ── present + export ──
+  // Presenting fullscreens the canvas IFRAME ELEMENT, so the document inside it
+  // can't see its own fullscreen state — tell it explicitly when present mode
+  // turns on/off so it gates editing and plays animations + nav chrome.
   const present = () => canvasRef.current?.requestFullscreen?.();
+  useEffect(() => {
+    const onFs = () =>
+      canvasRef.current?.contentWindow?.postMessage(
+        { target: "slides-view", type: "present", on: document.fullscreenElement === canvasRef.current },
+        "*",
+      );
+    document.addEventListener("fullscreenchange", onFs);
+    document.addEventListener("webkitfullscreenchange", onFs as EventListener);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFs);
+      document.removeEventListener("webkitfullscreenchange", onFs as EventListener);
+    };
+  }, []);
   async function exportPdf() {
     if (!selectedId) return;
     setExporting(true);
@@ -428,29 +495,69 @@ export function App() {
     } finally { setExporting(false); }
   }
 
-  // ── AI generate ──
+  // ── speaker notes (per-slide; the AI reads & writes these too) ──
+  // Refresh the draft when the slide changes or the deck reloads (viewKey bumps
+  // on slide-switch and on each streamed AI edit). Notes edits save "quiet" (no
+  // viewKey bump), so typing here never resets the draft mid-keystroke.
+  useEffect(() => { setNoteDraft(getNotes(slides[sel] ?? "")); }, [sel, selectedId, viewKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  function setSlideNotes(text: string) {
+    setNoteDraft(text);
+    const next = slides.slice();
+    next[sel] = setNotes(next[sel] ?? "", text);
+    setSlides(next);
+    scheduleSave(next, title, nav, true); // notes don't change the rendered slide
+  }
+
+  // ── AI generate (multi-step agent loop, streamed) ──
+  // The server drives the deck through add/edit/delete-slide verbs and streams
+  // each change over SSE; we mirror the deck as slides land, one at a time. The
+  // server already persists every change, so we never save back here.
   async function runGenerate() {
-    if (!prompt.trim() || genLoading) return;
+    if (!prompt.trim() || genLoading || !selectedId) return;
+    const id = selectedId;
     setGenLoading(true);
     try {
-      const res = await fetch("/api/generate", {
+      const res = await fetch(`/api/decks/${id}/generate`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, current_slide: slides[sel], deck_context: content }),
+        body: JSON.stringify({ prompt, current_index: selRef.current }),
       });
-      const data: any = await res.json();
-      if (!res.ok) { alert(data.error || "Generation failed"); return; }
-      const out: string = data.content || "";
-      // The model decides whether to edit this slide, add slides, or rebuild.
-      if (data.action === "replace_deck") {
-        const s = splitSlides(out); setSel(0); setSlidesAndSave(s.length ? s : [out]);
-      } else if (data.action === "edit_current") {
-        applyToSlide(sel, () => out);
-      } else {
-        const gen = splitSlides(out); const next = slides.slice(); next.splice(sel + 1, 0, ...gen);
-        setSel(sel + 1); setSlidesAndSave(next);
+      if (!res.ok || !res.body) {
+        const m: any = await res.json().catch(() => ({}));
+        alert(m.error || "Generation failed");
+        return;
       }
       setPrompt("");
-    } finally { setGenLoading(false); }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf("\n\n")) >= 0) {
+          const line = buf.slice(0, nl).split("\n").find((l) => l.startsWith("data:"));
+          buf = buf.slice(nl + 2);
+          if (!line) continue;
+          let ev: any;
+          try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+          if (ev.type === "slide") {
+            const s = splitSlides(ev.content);
+            rendered.current = ev.content; // server already persisted; keep save() in sync
+            setSlides(s.length ? s : [ev.content]);
+            const idx = Math.min(ev.sel ?? 0, Math.max(0, (s.length || 1) - 1));
+            setSel(idx); selRef.current = idx;
+            setViewKey((k) => k + 1); // show the slide that just changed
+          } else if (ev.type === "error") {
+            alert(ev.error || "Generation failed");
+          }
+        }
+      }
+    } catch (e) {
+      alert(String(e instanceof Error ? e.message : e));
+    } finally {
+      setGenLoading(false);
+    }
   }
 
   // ── brand inspector ──
@@ -488,8 +595,8 @@ export function App() {
       return t;
     });
   }
-  function setNavOpt(k: keyof Nav, v: boolean) {
-    const n = { ...nav, [k]: v }; setNav(n); save(slides, title, n);
+  function setNavMode(mode: NavMode) {
+    const n: Nav = { mode }; setNav(n); save(slides, title, n);
   }
 
   const radiusPx = tokens ? parseInt(tokens.radius) || 0 : 12;
@@ -649,11 +756,27 @@ export function App() {
             </div>
 
             <div className="px-4 pb-4">
+              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">Pagination</div>
+              <SelectRow label="Style" value={nav.mode} options={NAV_MODES.map((m) => m.l)}
+                onChange={(l) => setNavMode(NAV_MODES.find((m) => m.l === l)!.v)}
+                valueToLabel={(v) => NAV_MODES.find((m) => m.v === v)?.l ?? "Dots (centered)"} />
+              <p className="mt-1.5 text-[11px] leading-snug text-neutral-400">Applies to the whole deck. Dots and arrows + progress bar show only while presenting; page numbers also print in the PDF.</p>
+            </div>
+
+            <div className="px-4 pb-4">
               <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">Media</div>
               <button onClick={addMedia} className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-neutral-300 py-2 text-sm text-neutral-600 hover:bg-neutral-50">
                 <ImagePlus size={15} /> Add image or video
               </button>
               <p className="mt-1.5 text-[11px] leading-snug text-neutral-400">Added to this slide. Click an image on the slide to replace it; delete it from the slide to remove it for good.</p>
+            </div>
+
+            <div className="px-4 pb-4">
+              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">Speaker notes</div>
+              <textarea value={noteDraft} onChange={(e) => setSlideNotes(e.target.value)}
+                placeholder="What to say on this slide…"
+                className="h-24 w-full resize-none rounded-md border border-neutral-200 p-2 text-[12px] leading-relaxed outline-none focus:border-neutral-400" />
+              <p className="mt-1.5 text-[11px] leading-snug text-neutral-400">Shown in the presenter view (press S while presenting), never on the slide or in the PDF. The AI reads &amp; writes these.</p>
             </div>
 
             <div className="px-4 pb-6">
@@ -671,15 +794,6 @@ export function App() {
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Background</div>
                   <ColorRow label="Slide color" value={currentBg} onChange={(v) => changeBg(v)} />
                   <button onClick={() => changeBg(null)} className="text-xs text-neutral-400 hover:text-neutral-600">Reset to brand</button>
-                  <div className="border-t border-neutral-200 pt-3">
-                    <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">Navigation</div>
-                    <div className="space-y-2">
-                      <ToggleRow label="Arrows" value={nav.arrows} onChange={(v) => setNavOpt("arrows", v)} />
-                      <ToggleRow label="Progress bar" value={nav.progress} onChange={(v) => setNavOpt("progress", v)} />
-                      <ToggleRow label="Page numbers" value={nav.slideNumber} onChange={(v) => setNavOpt("slideNumber", v)} />
-                    </div>
-                    <p className="mt-2 text-[10px] leading-snug text-neutral-400">Arrows &amp; progress bar show only while presenting. Page numbers also appear in the exported PDF.</p>
-                  </div>
                 </div>
               )}
               <p className="mt-3 text-[11px] leading-snug text-neutral-400">Click any text or image on the slide to edit it, or the background for slide settings.</p>
@@ -759,14 +873,45 @@ function BrandEditor({ brandId, active, onBack, onChanged, onUse, onDeleted }: {
     const f = fontByName(n);
     patchTokens((t) => { t.fonts[role] = f.family; t.fonts.google = [...new Set([fontByName(nameOfFamily(t.fonts.heading)).google, fontByName(nameOfFamily(t.fonts.body)).google].filter(Boolean))]; return t; });
   }
+  // Multi-step agent loop, streamed: the agent adjusts tokens and edits the
+  // guidelines through tool calls; each change streams back and updates the
+  // preview live (same pattern as the slide editor).
   async function applyPrompt() {
     if (!instruction.trim() || busy) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/brands/${brandId}/prompt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instruction }) });
-      const b: any = await res.json();
-      if (!res.ok) { alert(b.error || "Failed"); return; }
-      setMd(b.design_md); setTokens(b.tokens); setInstruction(""); onChanged(); setPk((k) => k + 1);
+      const res = await fetch(`/api/brands/${brandId}/generate`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instruction }),
+      });
+      if (!res.ok || !res.body) {
+        const b: any = await res.json().catch(() => ({}));
+        alert(b.error || "Failed");
+        return;
+      }
+      setInstruction("");
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf("\n\n")) >= 0) {
+          const line = buf.slice(0, nl).split("\n").find((l) => l.startsWith("data:"));
+          buf = buf.slice(nl + 2);
+          if (!line) continue;
+          let ev: any;
+          try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+          if (ev.type === "brand") {
+            setMd(ev.design_md); setTokens(ev.tokens); onChanged(); setPk((k) => k + 1);
+          } else if (ev.type === "error") {
+            alert(ev.error || "Failed");
+          }
+        }
+      }
+    } catch (e) {
+      alert(String(e instanceof Error ? e.message : e));
     } finally { setBusy(false); }
   }
   async function del() {
@@ -803,8 +948,12 @@ function BrandEditor({ brandId, active, onBack, onChanged, onUse, onDeleted }: {
               <Group label="Typography">
                 <SelectRow label="Display" value={nameOfFamily(tokens.fonts.heading)} options={FONTS.map((f) => f.name)} onChange={(v) => setFont("heading", v)} />
                 <SelectRow label="Body" value={nameOfFamily(tokens.fonts.body)} options={FONTS.map((f) => f.name)} onChange={(v) => setFont("body", v)} />
-                <SliderRow label="Hero" value={tokens.sizes.hero} min={60} max={200} unit="px" onChange={(v) => patchTokens((t) => ((t.sizes.hero = v), t))} />
-                <SliderRow label="Body" value={tokens.sizes.body} min={18} max={48} unit="px" onChange={(v) => patchTokens((t) => ((t.sizes.body = v), t))} />
+                <SliderRow label="Heading" value={tokens.sizes.heading} min={12} max={100} unit="px" onChange={(v) => patchTokens((t) => ((t.sizes.heading = v), t))} />
+                <SliderRow label="Subheading" value={tokens.sizes.subheading} min={12} max={100} unit="px" onChange={(v) => patchTokens((t) => ((t.sizes.subheading = v), t))} />
+                <SliderRow label="Paragraph" value={tokens.sizes.body} min={12} max={100} unit="px" onChange={(v) => patchTokens((t) => ((t.sizes.body = v), t))} />
+                <SelectRow label="Align" value={tokens.textAlign} options={TEXT_ALIGNS.map((a) => a.l)}
+                  onChange={(l) => patchTokens((t) => ((t.textAlign = TEXT_ALIGNS.find((a) => a.l === l)!.v), t))}
+                  valueToLabel={(v) => TEXT_ALIGNS.find((a) => a.v === v)?.l ?? "Left"} />
               </Group>
               <Group label="Shape">
                 <SliderRow label="Radius" value={radiusPx} min={0} max={32} unit="px" onChange={(v) => patchTokens((t) => ((t.radius = `${v}px`), t))} />
@@ -881,21 +1030,28 @@ function SelectRow({ label, value, options, onChange, valueToLabel }: { label: s
   );
 }
 function SliderRow({ label, value, min, max, unit, onChange }: { label: string; value: number; min: number; max: number; unit: string; onChange: (v: number) => void }) {
+  // Drag the slider OR type an exact value. A local draft lets you type a
+  // multi-digit number without it being clamped on each keystroke; we clamp +
+  // commit on blur / Enter.
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+  const clamp = (n: number) => Math.max(min, Math.min(max, n));
+  const commit = () => {
+    const n = parseInt(draft, 10);
+    const v = clamp(Number.isFinite(n) ? n : value);
+    onChange(v); setDraft(String(v));
+  };
   return (
     <div className="flex items-center gap-2">
       <span className="flex-1 text-sm text-neutral-600">{label}</span>
-      <input type="range" min={min} max={max} value={value} onChange={(e) => onChange(parseInt(e.target.value))} className="w-24 accent-neutral-900" />
-      <span className="w-12 text-right text-xs tabular-nums text-neutral-500">{value}{unit}</span>
-    </div>
-  );
-}
-function ToggleRow({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <button onClick={() => onChange(!value)} className="flex w-full items-center gap-2">
-      <span className="flex-1 text-left text-sm text-neutral-600">{label}</span>
-      <span className={`relative h-5 w-9 rounded-full transition ${value ? "bg-neutral-900" : "bg-neutral-300"}`}>
-        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition ${value ? "left-[18px]" : "left-0.5"}`} />
+      <input type="range" min={min} max={max} value={value} onChange={(e) => onChange(parseInt(e.target.value, 10))} className="w-20 accent-neutral-900" />
+      <span className="flex items-center gap-0.5">
+        <input type="number" min={min} max={max} value={draft}
+          onChange={(e) => setDraft(e.target.value)} onBlur={commit}
+          onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+          className="w-11 rounded border border-neutral-200 px-1 py-1 text-right text-xs tabular-nums outline-none focus:border-neutral-400" />
+        <span className="text-xs text-neutral-400">{unit}</span>
       </span>
-    </button>
+    </div>
   );
 }

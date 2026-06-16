@@ -6,8 +6,9 @@ CREATE TABLE IF NOT EXISTS decks (
   title TEXT NOT NULL,
   content TEXT NOT NULL DEFAULT '',
   theme TEXT NOT NULL DEFAULT 'black',
-  -- per-presentation navigation chrome (arrows / progress bar / slide number)
-  nav TEXT NOT NULL DEFAULT '{"arrows":true,"progress":true,"slideNumber":true}',
+  -- per-presentation pagination: a single mode — "dots" (centered, default),
+  -- "arrows" (arrows + progress bar), "numbers" (page numbers), or "none".
+  nav TEXT NOT NULL DEFAULT '{"mode":"dots"}',
   -- which brand from the library this deck uses (NULL = the first/default brand)
   brand_id TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),

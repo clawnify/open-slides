@@ -50,6 +50,18 @@ styled with the brand's CSS variables:
 The editor renders slides live and keeps your place as you edit. New decks start
 from designed templates; you rarely write this HTML by hand.
 
+## Brands & DESIGN.md
+
+Every deck inherits a **brand** — one design system you edit visually *or* as a
+`DESIGN.md`. Colors, fonts, sizes, logo and text alignment are tokens that drive
+every slide's CSS variables, so decks are on-brand by construction. The same
+document carries written guidelines and example slides that ground AI slide
+generation, and you can reshape the whole brand from a prompt (*"darker, more
+playful, serif display"*) — the agent edits the tokens and the guidelines and the
+preview updates live.
+
+<img src="readme-brands.png" alt="The brand editor: a live guidelines preview on the left; design tokens (colors, typography, alignment, logo), a refine-by-prompt box, and the editable DESIGN.md on the right" width="100%" />
+
 ## Quickstart
 
 ```bash

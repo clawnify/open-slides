@@ -12,7 +12,7 @@ import { revealDoc } from "./reveal";
 import { renderDeckPdf, PdfRenderError } from "./pdf";
 import { parseTokens, brandHead, brandLogoTag, brandGuideHtml, setTokensInMd, DEFAULT_BRAND_MD, type BrandTokens } from "./brand";
 import { TEMPLATES } from "./templates";
-import { generate, editBrand, hasAiKey } from "./ai";
+import { generate, editBrand, hasAiKey, type DeckOps, type DeckSlide, type AuthoredSlide, type BrandOps, type BrandTokensPatch } from "./ai";
 
 type Bindings = {
   DB: D1Database;
@@ -53,17 +53,25 @@ interface Deck {
   updated_at: string;
 }
 
-interface Nav {
-  arrows: boolean;
-  progress: boolean;
-  slideNumber: boolean;
-}
-const DEFAULT_NAV: Nav = { arrows: true, progress: true, slideNumber: true };
+// Pagination is a single mutually-exclusive choice.
+type NavMode = "dots" | "arrows" | "numbers" | "none";
+interface Nav { mode: NavMode }
+const DEFAULT_NAV: Nav = { mode: "dots" }; // centered dots by default
+const NAV_MODES: NavMode[] = ["dots", "arrows", "numbers", "none"];
+
+// Tolerate the legacy {arrows,progress,slideNumber,dots} shape by collapsing it
+// to a single mode (decks created before pagination became one choice).
 function parseNav(s: string | undefined): Nav {
   try {
-    return { ...DEFAULT_NAV, ...(s ? JSON.parse(s) : {}) };
+    const o = s ? JSON.parse(s) : {};
+    if (typeof o.mode === "string" && NAV_MODES.includes(o.mode)) return { mode: o.mode };
+    if (o.dots) return { mode: "dots" };
+    if (o.arrows || o.progress) return { mode: "arrows" };
+    if (o.slideNumber) return { mode: "numbers" };
+    if (Object.keys(o).length) return { mode: "none" };
+    return { ...DEFAULT_NAV };
   } catch {
-    return DEFAULT_NAV;
+    return { ...DEFAULT_NAV };
   }
 }
 
@@ -82,8 +90,8 @@ app.post("/api/decks", async (c) => {
   const b = await c.req.json<Partial<Deck>>();
   if (!b.title?.trim()) return c.json({ error: "title is required" }, 400);
   const res = await run(
-    "INSERT INTO decks (title, content, theme, brand_id) VALUES (?, ?, ?, ?)",
-    [b.title.trim(), b.content ?? "", b.theme ?? "black", b.brand_id ?? null],
+    "INSERT INTO decks (title, content, theme, brand_id, nav) VALUES (?, ?, ?, ?, ?)",
+    [b.title.trim(), b.content ?? "", b.theme ?? "black", b.brand_id ?? null, JSON.stringify(DEFAULT_NAV)],
   );
   const row = await get<Deck>("SELECT * FROM decks WHERE rowid = ?", [res.lastInsertRowid]);
   return c.json(row, 201);
@@ -131,34 +139,98 @@ app.get("/api/decks/:id/view", async (c) => {
       v,
       only: Number.isFinite(only) ? only : undefined,
       thumb,
-      nav: thumb ? { arrows: false, progress: false, slideNumber: false } : parseNav(row.nav),
+      nav: thumb ? { mode: "none" } : parseNav(row.nav),
     }),
   );
 });
 
-// Natural-language slide generation. Returns generated content in the deck
-// format; the client inserts/replaces. mode: deck | slide | edit.
-app.post("/api/generate", async (c) => {
-  const b = await c.req.json<{ prompt?: string; current_slide?: string; deck_context?: string; deck_id?: string }>();
+// Natural-language slide generation as a live agent loop. The model drives the
+// deck through composable verbs (add/edit/delete slide); each verb persists the
+// deck and streams the change to the client over Server-Sent Events, so slides
+// appear one at a time while the agent keeps working.
+//
+// SSE events (one JSON object per `data:` frame):
+//   { type: "slide", sel, total, content }  — deck changed; `sel` = focus index
+//   { type: "done",  total, content }
+//   { type: "error", error }
+app.post("/api/decks/:id/generate", async (c) => {
+  const id = c.req.param("id");
+  const deck = await get<Deck>("SELECT * FROM decks WHERE id = ?", [id]);
+  if (!deck) return c.json({ error: "Not found" }, 404);
+  const b = await c.req.json<{ prompt?: string; current_index?: number }>();
   if (!b.prompt?.trim()) return c.json({ error: "prompt is required" }, 400);
   if (!hasAiKey(c.env)) {
     return c.json({ error: "AI generation isn't configured (set ANTHROPIC_API_KEY or OPENROUTER_API_KEY)." }, 503);
   }
-  try {
-    const deck = b.deck_id ? await get<Deck>("SELECT brand_id FROM decks WHERE id = ?", [b.deck_id]) : null;
-    const designMd = await brandMdFor(deck?.brand_id);
-    const result = await generate(c.env, {
-      prompt: b.prompt.trim(),
-      tokens: parseTokens(designMd),
-      designMd,
-      templates: TEMPLATES,
-      currentSlide: b.current_slide,
-      deckContext: b.deck_context,
-    });
-    return c.json(result); // { action, content }
-  } catch (err) {
-    return c.json({ error: String(err instanceof Error ? err.message : err) }, 502);
-  }
+
+  const designMd = await brandMdFor(deck.brand_id);
+  const chunks = splitDeck(deck.content);
+  const snapshot = (): DeckSlide[] => chunks.map((ch, i) => ({ index: i, ...extractNotes(ch) }));
+
+  const enc = new TextEncoder();
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const send = (obj: unknown) => writer.write(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
+
+  const persist = async (sel: number) => {
+    const content = joinDeck(chunks);
+    await run("UPDATE decks SET content = ?, updated_at = datetime('now') WHERE id = ?", [content, id]);
+    await send({ type: "slide", sel, total: chunks.length, content });
+  };
+
+  const ops: DeckOps = {
+    read: async () => snapshot(),
+    add: async (slide, afterIndex) => {
+      const at = afterIndex == null || afterIndex < 0 || afterIndex >= chunks.length ? chunks.length : afterIndex + 1;
+      chunks.splice(at, 0, assembleChunk(slide));
+      await persist(at);
+      return at;
+    },
+    edit: async (index, slide) => {
+      if (index < 0 || index >= chunks.length) throw new Error(`no slide at index ${index} (deck has ${chunks.length})`);
+      chunks[index] = assembleChunk(slide);
+      await persist(index);
+    },
+    remove: async (index) => {
+      if (index < 0 || index >= chunks.length) throw new Error(`no slide at index ${index} (deck has ${chunks.length})`);
+      chunks.splice(index, 1);
+      await persist(Math.max(0, index - 1));
+    },
+  };
+
+  // Drive the loop in the background; the streamed response keeps the worker
+  // alive until we close the writer, and waitUntil guards against early teardown.
+  const run$ = (async () => {
+    try {
+      await generate(
+        c.env,
+        {
+          prompt: b.prompt!.trim(),
+          tokens: parseTokens(designMd),
+          designMd,
+          templates: TEMPLATES,
+          currentIndex: b.current_index ?? 0,
+          deck: snapshot(),
+        },
+        ops,
+      );
+      await send({ type: "done", total: chunks.length, content: joinDeck(chunks) });
+    } catch (err) {
+      await send({ type: "error", error: String(err instanceof Error ? err.message : err) });
+    } finally {
+      scheduleSweep(c); // a deck rewrite may have dropped a media reference
+      await writer.close().catch(() => {});
+    }
+  })();
+  try { c.executionCtx?.waitUntil(run$); } catch { /* no execution ctx in some dev paths */ }
+
+  return new Response(readable, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    },
+  });
 });
 
 // ── Brand library (each deck picks one) ──────────────────────────────
@@ -225,22 +297,80 @@ app.delete("/api/brands/:id", async (c) => {
   return c.json({ ok: true });
 });
 
-// Edit a brand by natural-language instruction.
-app.post("/api/brands/:id/prompt", async (c) => {
+// Edit a brand by natural-language instruction — a live agent loop. The model
+// adjusts tokens and rewrites the guidelines through composable verbs; each
+// change persists and streams over SSE so the brand preview updates live.
+//
+// SSE events: { type: "brand", design_md, tokens } | { type: "done" } | { type: "error", error }
+app.post("/api/brands/:id/generate", async (c) => {
   const id = c.req.param("id");
   const existing = await get<Brand>("SELECT * FROM brands WHERE id = ?", [id]);
   if (!existing) return c.json({ error: "Not found" }, 404);
   const { instruction } = await c.req.json<{ instruction?: string }>();
   if (!instruction?.trim()) return c.json({ error: "instruction is required" }, 400);
   if (!hasAiKey(c.env)) return c.json({ error: "AI isn't configured (set ANTHROPIC_API_KEY or OPENROUTER_API_KEY)." }, 503);
-  try {
-    const nextMd = await editBrand(c.env, { instruction: instruction.trim(), currentMd: existing.design_md });
-    await run("UPDATE brands SET design_md = ?, updated_at = datetime('now') WHERE id = ?", [nextMd, id]);
-    scheduleSweep(c);
-    return c.json({ id, name: existing.name, design_md: nextMd, tokens: parseTokens(nextMd) });
-  } catch (err) {
-    return c.json({ error: String(err instanceof Error ? err.message : err) }, 502);
-  }
+
+  let md = existing.design_md || DEFAULT_BRAND_MD;
+
+  const enc = new TextEncoder();
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const send = (obj: unknown) => writer.write(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
+
+  const persist = async () => {
+    await run("UPDATE brands SET design_md = ?, updated_at = datetime('now') WHERE id = ?", [md, id]);
+    await send({ type: "brand", design_md: md, tokens: parseTokens(md) });
+  };
+
+  const ops: BrandOps = {
+    read: async () => md,
+    updateTokens: async (patch: BrandTokensPatch) => {
+      const cur = parseTokens(md);
+      const merged: BrandTokens = {
+        ...cur,
+        ...(patch.radius !== undefined ? { radius: patch.radius } : {}),
+        ...(patch.logoPosition !== undefined ? { logoPosition: patch.logoPosition } : {}),
+        ...(patch.textAlign !== undefined ? { textAlign: patch.textAlign } : {}),
+        colors: { ...cur.colors, ...(patch.colors || {}) },
+        fonts: { ...cur.fonts, ...(patch.fonts || {}) },
+        sizes: { ...cur.sizes, ...(patch.sizes || {}) },
+      };
+      md = setTokensInMd(md, merged);
+      await persist();
+    },
+    editGuidelines: async (oldStr: string, newStr: string) => {
+      // Surgical prose edit: replace one exact snippet. Guard the tokens block so
+      // a prose edit can never corrupt the JSON (visual changes go via updateTokens).
+      const block = md.match(/```[a-zA-Z]*\s*clawnify-brand[\s\S]*?```/)?.[0] ?? "";
+      if (block && block.includes(oldStr)) throw new Error("that text is in the tokens block — use update_tokens for token/visual changes");
+      const idx = md.indexOf(oldStr);
+      if (idx === -1) throw new Error("text not found — read_brand and copy the exact snippet to replace");
+      if (md.indexOf(oldStr, idx + oldStr.length) !== -1) throw new Error("that text appears more than once — include more surrounding context to make it unique");
+      md = md.slice(0, idx) + newStr + md.slice(idx + oldStr.length);
+      await persist();
+    },
+    writeGuidelines: async (markdown: string) => {
+      md = setTokensInMd(markdown, parseTokens(md)); // new prose, keep current tokens
+      await persist();
+    },
+  };
+
+  const run$ = (async () => {
+    try {
+      await editBrand(c.env, { instruction: instruction.trim(), currentMd: md }, ops);
+      await send({ type: "done" });
+    } catch (err) {
+      await send({ type: "error", error: String(err instanceof Error ? err.message : err) });
+    } finally {
+      scheduleSweep(c); // the logo reference may have changed
+      await writer.close().catch(() => {});
+    }
+  })();
+  try { c.executionCtx?.waitUntil(run$); } catch { /* no execution ctx in some dev paths */ }
+
+  return new Response(readable, {
+    headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" },
+  });
 });
 
 // Full visual preview of a brand: a guidelines page (example slides + color
@@ -340,6 +470,41 @@ app.get("/api/uploads/:key", async (c) => {
     headers: { "Content-Type": obj.contentType, "Cache-Control": "public, max-age=31536000" },
   });
 });
+
+// ── deck content helpers (slides + speaker notes) ────────────────────
+// A deck is one document; slides are separated by a line containing only `---`.
+// Mirrors the client's splitSlides so indices line up across the wire.
+function splitDeck(content: string): string[] {
+  return ("\n" + content + "\n")
+    .replace(/\r\n/g, "\n")
+    .split(/\n[ \t]*---[ \t]*\n/)
+    .map((c) => c.replace(/^\n+|\n+$/g, ""))
+    .filter((c) => c.trim());
+}
+const joinDeck = (chunks: string[]) => chunks.join("\n\n---\n\n");
+
+// Speaker notes live inside the slide as <aside class="notes">…</aside>. They're
+// the per-slide store of intent: hidden on the slide and in the PDF, shown in the
+// presenter view, and read/written by the agent. We keep notes and slide markup
+// separate over the tool boundary and assemble them into the chunk.
+const NOTES_RE = /<aside\b[^>]*\bclass="[^"]*\bnotes\b[^"]*"[^>]*>([\s\S]*?)<\/aside>/i;
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const decodeHtml = (s: string) =>
+  s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+
+function extractNotes(chunk: string): { content: string; notes: string } {
+  const m = chunk.match(NOTES_RE);
+  if (!m) return { content: chunk.trim(), notes: "" };
+  const notes = decodeHtml(m[1].trim());
+  const content = chunk.replace(NOTES_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+  return { content, notes };
+}
+
+function assembleChunk({ content, notes }: AuthoredSlide): string {
+  const body = content.trim();
+  return notes.trim() ? `${body}\n<aside class="notes">${escapeHtml(notes.trim())}</aside>` : body;
+}
 
 // ── helpers ──────────────────────────────────────────────────────────
 

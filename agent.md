@@ -15,19 +15,21 @@ A deck is one document. Slides are separated by a line containing only `---`.
 Every slide is HTML laid out on a full 1280×720 canvas. Style with the brand CSS
 variables (never hardcode brand colors/fonts) so the deck stays on-brand:
 `--brand-bg`, `--brand-text`, `--brand-heading`, `--brand-accent`,
-`--brand-muted`, `--brand-hero-size`, `--brand-body-size`, `--brand-radius`,
-`--r-heading-font` (display font), `--r-main-font` (body font).
+`--brand-muted`, `--brand-heading-size`, `--brand-subheading-size`,
+`--brand-body-size`, `--brand-radius`, `--r-heading-font` (display font),
+`--r-main-font` (body font). The three sizes (heading/subheading/body, 12–100px)
+are the brand's type scale; plain `h1`/`h2`/`p` inherit them, so usually omit
+font-size and only set one (using the matching variable) for a special element.
 
 ```html
-<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;padding:0 9%;box-sizing:border-box">
+<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:0 9%;box-sizing:border-box">
   <div class="kicker" style="font-size:24px">Your kicker</div>
-  <h1 style="font:700 var(--brand-hero-size)/1.02 var(--r-heading-font);margin:14px 0 0;color:var(--brand-heading)">Title slide</h1>
-  <p style="font:400 var(--brand-body-size)/1.4 var(--r-main-font);color:var(--brand-muted);max-width:72%;margin-top:18px">A supporting subtitle.</p>
+  <h1 style="font-weight:700;color:var(--brand-heading)">Title slide</h1>
+  <p style="color:var(--brand-muted);max-width:72%;margin-top:18px">A supporting subtitle.</p>
 </div>
 
 ---
 
-<!-- .slide: data-background-color="#0a0a0a" -->
 <div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:0 9%;box-sizing:border-box">
   <h2 style="font:700 60px/1.05 var(--r-heading-font);margin:0;color:var(--brand-heading)">Second slide</h2>
   <div class="chart" style="flex:1;min-height:0;max-height:400px;margin-top:18px" data-chart='{"type":"bar","labels":["Q1","Q2","Q3"],"data":[12,19,27]}'></div>
@@ -35,15 +37,20 @@ variables (never hardcode brand colors/fonts) so the deck stays on-brand:
 </div>
 ```
 
-- **Per-slide background:** a `<!-- .slide: ATTRS -->` line as the slide's FIRST
-  line sets reveal slide attributes — `data-background-color`,
-  `data-background-gradient`, or `data-background-image="assets/<key>"`.
+- **Background — leave it to the brand.** Every slide sits on the brand canvas
+  (`--brand-bg`) automatically; that's what keeps the deck on-brand, so do NOT set
+  a per-slide background by default. Only when the user explicitly asks for a
+  specific slide background, add a `<!-- .slide: ATTRS -->` first line
+  (`data-background-color`, `data-background-gradient`, or
+  `data-background-image="assets/<key>"`), preferring the brand's own colours.
 - **Charts:** a `<div class="chart" data-chart='{"type":"bar|line|donut","labels":[…],"data":[…]}'></div>`
   renders as on-brand SVG automatically (give it a height). Don't style it yourself.
 - **Animations:** `class="fragment fade-up"` makes an element animate in — these
   play only while presenting, never in the editor or the PDF. Effects: fade-up,
   fade-down, fade-left, fade-right, zoom-in, grow.
-- **Speaker notes:** `<aside class="notes">…</aside>` inside a slide.
+- **Speaker notes:** `<aside class="notes">…</aside>` inside a slide — the
+  per-slide store of intent (what to say / the point of the slide). Hidden on the
+  slide and in the PDF, shown in the presenter view. Write one per slide.
 - **Code:** `<pre><code class="language-ts">…</code></pre>` is syntax-highlighted.
 
 ## Embedding media
