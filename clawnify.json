@@ -12,6 +12,10 @@
     "storage": true
   },
 
+  "env": {
+    "optional": ["OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"]
+  },
+
   "deploy": {
     "title": "Deploy your Open Slides",
     "subtitle": "Write decks in Markdown, present fullscreen in the browser, and export to PDF.",
