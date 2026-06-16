@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Plus,
   Play,
@@ -16,7 +16,26 @@ import {
   Palette,
   ArrowLeft,
   Check,
+  ImagePlus,
 } from "lucide-react";
+
+// Open a file picker and upload the chosen file as an asset. Resolves to the
+// stored asset (or null if cancelled).
+function pickAndUpload(accept: string): Promise<Asset | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = accept;
+    input.onchange = async () => {
+      const f = input.files?.[0];
+      if (!f) return resolve(null);
+      const fd = new FormData();
+      fd.append("file", f);
+      resolve(await fetch("/api/assets", { method: "POST", body: fd }).then((r) => r.json()));
+    };
+    input.click();
+  });
+}
 
 // ── deck content <-> slides ──────────────────────────────────────────
 function splitSlides(content: string): string[] {
@@ -27,7 +46,6 @@ function splitSlides(content: string): string[] {
     .filter((c) => c.trim());
 }
 const joinSlides = (s: string[]) => s.join("\n\n---\n\n");
-const isHtmlSlide = (s: string) => /^\s*<!--\s*html\s*-->/i.test(s);
 
 // Must mirror the renderer's data-sid selector exactly (same order) so a clicked
 // element maps back to the right source node.
@@ -86,18 +104,6 @@ function removeElHtml(chunk: string, sid: number): string {
   const { attrs, body } = parseHtmlSlide(chunk);
   return buildHtmlSlide(attrs, withBody(body, (r) => elBySid(r, sid)?.remove()));
 }
-function applyAnimMd(chunk: string, text: string, effect: string): string {
-  const lines = chunk.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    if (text && lines[i].includes(text)) {
-      let line = lines[i].replace(/\s*<!--\s*\.element:[^>]*-->\s*$/, "");
-      if (effect) line += ` <!-- .element: class="${effect === "fade" ? "fragment" : `fragment ${effect}`}" -->`;
-      lines[i] = line;
-      break;
-    }
-  }
-  return lines.join("\n");
-}
 function getSlideBg(chunk: string): string | null {
   const m = chunk.match(/data-background-color="([^"]*)"/i);
   return m ? m[1] : null;
@@ -112,7 +118,9 @@ function setSlideBg(chunk: string, color: string | null): string {
   }
   if (!color) return chunk;
   const comment = `<!-- .slide: data-background-color="${color}" -->`;
-  return isHtmlSlide(chunk) ? chunk.replace(/(^\s*<!--\s*html\s*-->\s*\n?)/i, `$1${comment}\n`) : `${comment}\n${chunk}`;
+  // Insert after an optional leading `<!-- html -->` marker, else prepend.
+  if (/^\s*<!--\s*html\s*-->/i.test(chunk)) return chunk.replace(/(^\s*<!--\s*html\s*-->\s*\n?)/i, `$1${comment}\n`);
+  return `${comment}\n${chunk}`;
 }
 
 // ── brand tokens ─────────────────────────────────────────────────────
@@ -122,7 +130,14 @@ interface BrandTokens {
   sizes: { hero: number; body: number };
   radius: string;
   logo: string;
+  logoPosition: "top-left" | "top-right" | "bottom-left" | "bottom-right";
 }
+const LOGO_POSITIONS = [
+  { v: "top-left", l: "Top left" },
+  { v: "top-right", l: "Top right" },
+  { v: "bottom-left", l: "Bottom left" },
+  { v: "bottom-right", l: "Bottom right" },
+] as const;
 const SYSTEM_SANS = "-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
 const FONTS = [
   { name: "System sans", family: SYSTEM_SANS, google: "" },
@@ -152,13 +167,18 @@ interface Deck { id: string; title: string; content: string; nav: string; update
 interface Asset { id: string; key: string; name: string; content_type: string }
 interface SlideTemplate { id: string; name: string; body: string }
 interface Nav { arrows: boolean; progress: boolean; slideNumber: boolean }
-interface SelEl { sid: number; tag: string; anim: string; text: string; isHtml: boolean }
+interface SelEl { sid: number; tag: string; anim: string; text: string }
 
-const STARTER = [
-  `# Your Presentation\n### A subtitle goes here\n\nPress **Space** or → to advance.`,
-  `## Agenda\n\n- Where we are\n- What we're building\n- What's next`,
-  `## Thank you\n\nQuestions?`,
-];
+// A designed (HTML) slide wrapper using the brand CSS variables. Slides are
+// always HTML — markdown is not supported.
+const designedSlide = (inner: string) =>
+  `<!-- html -->\n<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;text-align:left;padding:0 9%;box-sizing:border-box">\n${inner}\n</div>`;
+const BLANK_SLIDE = designedSlide(
+  `  <h2 style="font:700 60px/1.05 var(--r-heading-font);margin:0;color:var(--brand-heading)">New slide</h2>\n  <p style="font:400 var(--brand-body-size)/1.5 var(--r-main-font);color:var(--brand-text);margin-top:18px;max-width:80%">Click to edit, or use the prompt below.</p>`,
+);
+const FALLBACK_STARTER = designedSlide(
+  `  <div class="kicker" style="font-size:24px">Your kicker</div>\n  <h1 style="font:700 var(--brand-hero-size)/1.02 var(--r-heading-font);margin:14px 0 0;color:var(--brand-heading)">Your presentation</h1>\n  <p style="font:400 var(--brand-body-size)/1.4 var(--r-main-font);color:var(--brand-muted);max-width:72%;margin-top:18px">A supporting subtitle that sets the scene in one clear line.</p>`,
+);
 
 export function App() {
   const [decks, setDecks] = useState<Deck[]>([]);
@@ -230,7 +250,7 @@ export function App() {
       if (m.source !== "slides-preview") return;
       if (m.type === "slidechanged") { setSel(m.h ?? 0); setSelEl(null); }
       else if (m.type === "bg-click") setSelEl(null);
-      else if (m.type === "el-select") setSelEl({ sid: m.sid, tag: m.tag, anim: m.anim, text: m.text, isHtml: isHtmlSlide(slidesRef.current[selRef.current] ?? "") });
+      else if (m.type === "el-select") setSelEl({ sid: m.sid, tag: m.tag, anim: m.anim, text: m.text });
       else if (m.type === "el-edit") onElEdit(m.sid, m.oldText, m.newText);
       else if (m.type === "img-click") onImgClick(m.sid, m.src);
     };
@@ -245,6 +265,15 @@ export function App() {
   useEffect(() => { slidesRef.current = slides; }, [slides]);
   useEffect(() => { selRef.current = sel; }, [sel]);
 
+  // The canvas src must NOT depend on `sel`: slide navigation goes through
+  // postMessage (gotoSlide), so reacting to `sel` here would reload the iframe on
+  // every move and flash slide 1. It reloads only when the deck/brand changes
+  // (viewKey), restoring the current slide via the h= param captured at that moment.
+  const canvasSrc = useMemo(
+    () => (selectedId ? `/api/decks/${selectedId}/view?h=${selRef.current}&t=${viewKey}` : ""),
+    [selectedId, viewKey],
+  );
+
   function selectDeck(d: Deck) {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     setSelectedId(d.id);
@@ -252,6 +281,7 @@ export function App() {
     const s = splitSlides(d.content);
     setSlides(s.length ? s : [""]);
     setSel(0);
+    selRef.current = 0; // keep the canvasSrc memo from restoring the prior deck's slide
     setSelEl(null);
     try { setNav({ arrows: true, progress: true, slideNumber: true, ...JSON.parse(d.nav || "{}") }); } catch { /* default */ }
     rendered.current = d.content;
@@ -285,34 +315,38 @@ export function App() {
   function setSlidesAndSave(next: string[]) { setSlides(next); scheduleSave(next); }
 
   // ── click-to-edit write-backs ──
-  function onElEdit(sid: number, oldText: string, newText: string) {
+  function onElEdit(sid: number, _oldText: string, newText: string) {
     const i = selRef.current;
     const chunk = slidesRef.current[i] ?? "";
-    const next = isHtmlSlide(chunk) ? applyTextHtml(chunk, sid, newText) : chunk.replace(oldText, newText);
-    applyToSlide(i, () => next);
+    applyToSlide(i, () => applyTextHtml(chunk, sid, newText));
   }
-  async function onImgClick(sid: number, src: string) {
-    const input = document.createElement("input");
-    input.type = "file"; input.accept = "image/*";
-    input.onchange = async () => {
-      const f = input.files?.[0]; if (!f) return;
-      const fd = new FormData(); fd.append("file", f);
-      const a: Asset = await fetch("/api/assets", { method: "POST", body: fd }).then((r) => r.json());
-      const ref = `assets/${a.key}`;
-      const i = selRef.current; const chunk = slidesRef.current[i] ?? "";
-      if (isHtmlSlide(chunk)) applyToSlide(i, () => applyImgHtml(chunk, sid, ref));
-      else { const old = src.replace("/api/uploads/", "assets/"); applyToSlide(i, () => chunk.replace(old, ref)); }
-    };
-    input.click();
+  async function onImgClick(sid: number, _src: string) {
+    const a = await pickAndUpload("image/*");
+    if (!a) return;
+    const i = selRef.current; const chunk = slidesRef.current[i] ?? "";
+    applyToSlide(i, () => applyImgHtml(chunk, sid, `assets/${a.key}`));
+  }
+  // Upload a new image/video and add it to the current slide.
+  async function addMedia() {
+    const a = await pickAndUpload("image/*,video/*");
+    if (!a) return;
+    const ref = `assets/${a.key}`;
+    const isVideo = (a.content_type || "").startsWith("video/");
+    const i = sel; const chunk = slides[i] ?? "";
+    const { attrs, body } = parseHtmlSlide(chunk);
+    const tag = isVideo
+      ? `<video controls src="${ref}" style="max-width:100%;border-radius:var(--brand-radius)"></video>`
+      : `<img src="${ref}" alt="" style="max-width:100%;border-radius:var(--brand-radius)" />`;
+    applyToSlide(i, () => buildHtmlSlide(attrs, `${body}\n${tag}`));
   }
   function setAnim(effect: string) {
     if (!selEl) return;
     setSelEl({ ...selEl, anim: effect });
     const i = sel; const chunk = slides[i] ?? "";
-    applyToSlide(i, () => (selEl.isHtml ? applyAnimHtml(chunk, selEl.sid, effect === "none" ? "" : effect) : applyAnimMd(chunk, selEl.text, effect === "none" ? "" : effect)));
+    applyToSlide(i, () => applyAnimHtml(chunk, selEl.sid, effect === "none" ? "" : effect));
   }
   function deleteSelEl() {
-    if (!selEl || !selEl.isHtml) return;
+    if (!selEl) return;
     applyToSlide(sel, (c) => removeElHtml(c, selEl.sid));
     setSelEl(null);
   }
@@ -348,11 +382,19 @@ export function App() {
     setSel(Math.max(0, Math.min(i, next.length - 1))); setSlidesAndSave(next);
   }
 
+  // New decks start from designed slides (Title + Title-and-bullets), or a single
+  // fallback slide if the templates haven't loaded yet.
+  function starterContent() {
+    const pick = (id: string) => templates.find((t) => t.id === id)?.body;
+    const bodies = [pick("title"), pick("bullets")].filter(Boolean) as string[];
+    return bodies.length ? bodies.join("\n\n---\n\n") : FALLBACK_STARTER;
+  }
+
   // ── decks ──
   async function newDeck() {
     const created: Deck = await fetch("/api/decks", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: "Untitled deck", content: joinSlides(STARTER) }),
+      body: JSON.stringify({ title: "Untitled deck", content: starterContent() }),
     }).then((r) => r.json());
     setDecks((ds) => [created, ...ds]); selectDeck(created);
   }
@@ -365,7 +407,7 @@ export function App() {
   async function newDeckWithBrand(id: string) {
     const created: Deck = await fetch("/api/decks", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: "Untitled deck", content: joinSlides(STARTER), brand_id: id }),
+      body: JSON.stringify({ title: "Untitled deck", content: starterContent(), brand_id: id }),
     }).then((r) => r.json());
     setDecks((ds) => [created, ...ds]);
     selectDeck(created);
@@ -545,10 +587,10 @@ export function App() {
               <button onClick={() => setAddOpen((o) => !o)} className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-neutral-300 py-2 text-sm text-neutral-600 hover:bg-neutral-50"><Plus size={15} /> Add slide</button>
               {addOpen && (
                 <div className="absolute bottom-12 left-2 right-2 z-30 max-h-72 overflow-y-auto rounded-md border border-neutral-200 bg-white py-1 shadow-lg">
-                  <button onClick={() => addSlide("## New slide\n\nYour content here")} className="block w-full px-3 py-1.5 text-left text-xs hover:bg-neutral-100">Blank (markdown)</button>
-                  <div className="my-1 border-t border-neutral-100" />
                   <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">Designed</div>
                   {templates.map((t) => (<button key={t.id} onClick={() => addSlide(t.body)} className="block w-full px-3 py-1.5 text-left text-xs hover:bg-neutral-100">{t.name}</button>))}
+                  <div className="my-1 border-t border-neutral-100" />
+                  <button onClick={() => addSlide(BLANK_SLIDE)} className="block w-full px-3 py-1.5 text-left text-xs hover:bg-neutral-100">Blank slide</button>
                 </div>
               )}
             </div>
@@ -556,8 +598,13 @@ export function App() {
 
           {/* canvas + prompt/code */}
           <main className="flex min-w-0 flex-1 flex-col bg-neutral-100">
-            <div className="min-h-0 flex-1 p-3">
-              <iframe key={viewKey} ref={canvasRef} src={`/api/decks/${selected.id}/view?h=${sel}&t=${viewKey}`} title="Canvas" allowFullScreen className="h-full w-full rounded-lg border border-neutral-200 bg-white shadow-sm" />
+            {/* Always present the canvas as the largest 16:9 box that fits the
+                available space (container-query units), so it never stretches with
+                the window — only the letterbox around it grows. */}
+            <div className="flex min-h-0 flex-1 items-center justify-center p-3" style={{ containerType: "size" }}>
+              <div style={{ width: "min(100cqw, calc(100cqh * 16 / 9))", aspectRatio: "16 / 9" }}>
+                <iframe key={viewKey} ref={canvasRef} src={canvasSrc} title="Canvas" allowFullScreen className="h-full w-full rounded-lg border border-neutral-200 bg-white shadow-sm" />
+              </div>
             </div>
             <div className="flex h-44 shrink-0 flex-col border-t border-neutral-200 bg-white">
               <div className="flex items-center gap-1 px-3 pt-2">
@@ -582,7 +629,7 @@ export function App() {
                 </div>
               ) : (
                 <textarea value={slides[sel] ?? ""} onChange={(e) => applyToSlide(sel, () => e.target.value)} spellCheck={false}
-                  placeholder="Edit this slide — Markdown, or an HTML slide starting with <!-- html -->"
+                  placeholder="Edit this slide's HTML"
                   className="flex-1 resize-none px-3 pb-3 font-mono text-[12.5px] leading-relaxed outline-none" />
               )}
             </div>
@@ -601,12 +648,20 @@ export function App() {
               </div>
             </div>
 
+            <div className="px-4 pb-4">
+              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">Media</div>
+              <button onClick={addMedia} className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-neutral-300 py-2 text-sm text-neutral-600 hover:bg-neutral-50">
+                <ImagePlus size={15} /> Add image or video
+              </button>
+              <p className="mt-1.5 text-[11px] leading-snug text-neutral-400">Added to this slide. Click an image on the slide to replace it; delete it from the slide to remove it for good.</p>
+            </div>
+
             <div className="px-4 pb-6">
               {selEl ? (
                 <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
                   <div className="mb-2 flex items-center justify-between">
                     <span className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Element · {selEl.tag.toLowerCase()}</span>
-                    {selEl.isHtml && <button onClick={deleteSelEl} className="text-neutral-400 hover:text-red-500"><Trash2 size={13} /></button>}
+                    <button onClick={deleteSelEl} className="text-neutral-400 hover:text-red-500"><Trash2 size={13} /></button>
                   </div>
                   <SelectRow label="Animate in" value={selEl.anim} options={ANIMS.map((a) => a.l)}
                     onChange={(l) => setAnim(ANIMS.find((a) => a.l === l)!.v)} valueToLabel={(v) => ANIMS.find((a) => a.v === v)?.l ?? "None"} />
@@ -645,6 +700,7 @@ export function App() {
 }
 
 // ── brand library card ──
+const resolveLogo = (logo: string) => (logo.startsWith("assets/") ? `/api/uploads/${logo.slice("assets/".length)}` : logo);
 function familyCss(f: string) { return /[, ]/.test(f) ? f : `'${f}'`; }
 function BrandCard({ brand, active, onUse, onEdit }: { brand: { id: string; name: string; tokens: BrandTokens }; active: boolean; onUse: () => void; onEdit: () => void }) {
   const t = brand.tokens;
@@ -752,6 +808,27 @@ function BrandEditor({ brandId, active, onBack, onChanged, onUse, onDeleted }: {
               </Group>
               <Group label="Shape">
                 <SliderRow label="Radius" value={radiusPx} min={0} max={32} unit="px" onChange={(v) => patchTokens((t) => ((t.radius = `${v}px`), t))} />
+              </Group>
+              <Group label="Logo">
+                <div className="flex items-center gap-3">
+                  <div className="grid h-12 w-20 shrink-0 place-items-center overflow-hidden rounded-md border border-neutral-200 bg-neutral-50">
+                    {tokens.logo
+                      ? <img src={resolveLogo(tokens.logo)} alt="" className="max-h-10 max-w-[72px] object-contain" />
+                      : <span className="text-[10px] text-neutral-400">None</span>}
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <button onClick={async () => { const a = await pickAndUpload("image/*"); if (a) patchTokens((t) => ((t.logo = `assets/${a.key}`), t)); }}
+                      className="rounded-md border border-neutral-200 px-2.5 py-1 text-xs hover:bg-neutral-50">Upload logo</button>
+                    {tokens.logo && <button onClick={() => patchTokens((t) => ((t.logo = ""), t))} className="text-left text-xs text-neutral-400 hover:text-red-500">Remove</button>}
+                  </div>
+                </div>
+                {tokens.logo && (
+                  <SelectRow label="Position" value={tokens.logoPosition}
+                    options={LOGO_POSITIONS.map((p) => p.l)}
+                    onChange={(l) => patchTokens((t) => ((t.logoPosition = LOGO_POSITIONS.find((p) => p.l === l)!.v), t))}
+                    valueToLabel={(v) => LOGO_POSITIONS.find((p) => p.v === v)?.l ?? "Bottom right"} />
+                )}
+                <p className="text-[11px] leading-snug text-neutral-400">Shown in the chosen corner of every slide and in the exported PDF.</p>
               </Group>
               <div>
                 <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">Refine by prompt</div>

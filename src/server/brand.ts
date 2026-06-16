@@ -12,7 +12,11 @@ export interface BrandTokens {
   sizes: { hero: number; body: number }; // px — Hero (title) + Body text scale
   radius: string;
   logo: string; // "assets/<key>" or a URL, or "" for none
+  logoPosition: LogoPosition; // which corner the logo overlay sits in
 }
+
+export type LogoPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+const LOGO_POSITIONS: LogoPosition[] = ["top-left", "top-right", "bottom-left", "bottom-right"];
 
 const DEFAULTS: BrandTokens = {
   colors: { bg: "#FFFFFF", text: "#1A1814", heading: "#111111", accent: "#6D4CFF", muted: "#6F6A63" },
@@ -25,6 +29,7 @@ const DEFAULTS: BrandTokens = {
   sizes: { hero: 96, body: 34 },
   radius: "14px",
   logo: "",
+  logoPosition: "bottom-right",
 };
 
 export const DEFAULT_BRAND_MD = `# Brand design system
@@ -40,10 +45,9 @@ The type voice splits into two roles: a **display** face for headlines (big, wit
 tight tracking) and a **body** face for everything else. The boundary is strict —
 never set body copy in the display face, never set a headline in the body face.
 
-Designed slides are full-bleed and left-aligned with content vertically centered;
-quick markdown slides stay classically centered. Color does the emphasis work —
-the accent appears on kickers, key numbers, links and charts, never on large
-fills.
+Slides are full-bleed and left-aligned with content vertically centered. Color
+does the emphasis work — the accent appears on kickers, key numbers, links and
+charts, never on large fills.
 
 **Key characteristics**
 - Light canvas (the bg token), near-black ink, one accent reserved for emphasis.
@@ -93,8 +97,7 @@ Every slide is a fixed 1280×720 (16:9) canvas. Designed slides position content
 absolutely inside it; reveal scales the whole canvas to any screen.
 
 ### Composition
-- Designed slides: left-aligned, vertically centered, ~9% side padding.
-- Markdown slides: centered, for quick text.
+- Left-aligned, vertically centered, ~9% side padding.
 - Whitespace is generous — let one idea breathe; never pack a slide.
 
 ### Spacing
@@ -171,7 +174,8 @@ or by prompting.
   },
   "sizes": { "hero": 96, "body": 32 },
   "radius": "14px",
-  "logo": ""
+  "logo": "",
+  "logoPosition": "bottom-right"
 }
 \`\`\`
 `;
@@ -188,6 +192,7 @@ export function parseTokens(designMd: string): BrandTokens {
       sizes: { ...DEFAULTS.sizes, ...(raw.sizes || {}) },
       radius: raw.radius || DEFAULTS.radius,
       logo: typeof raw.logo === "string" ? raw.logo : "",
+      logoPosition: LOGO_POSITIONS.includes(raw.logoPosition) ? raw.logoPosition : DEFAULTS.logoPosition,
     };
   } catch {
     return DEFAULTS;
@@ -214,6 +219,13 @@ function fontStack(primary: string, kind: "sans" | "mono"): string {
   const has = /[, ]/.test(primary); // already a stack or a bare family name
   const fallback = kind === "mono" ? "ui-monospace, monospace" : "-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
   return has ? css(primary) : `'${css(primary)}', ${fallback}`;
+}
+
+/** CSS edge offsets placing the logo in the chosen corner. */
+function logoCornerCss(pos: LogoPosition): string {
+  const v = pos.startsWith("top") ? "top: 26px;" : "bottom: 26px;";
+  const h = pos.endsWith("left") ? "left: 30px;" : "right: 30px;";
+  return `${v} ${h}`;
 }
 
 /** <head> markup: web-font links + reveal variable overrides + logo styling. */
@@ -257,7 +269,7 @@ export function brandHead(tokens: BrandTokens): string {
     letter-spacing: 0.18em; text-transform: uppercase; color: var(--brand-accent);
   }
   /* position:fixed repeats on every printed page, so the logo shows on each PDF page too. */
-  .brand-logo { position: fixed; bottom: 26px; right: 30px; height: 30px; opacity: 0.9; z-index: 40; }
+  .brand-logo { position: fixed; height: 30px; opacity: 0.9; z-index: 40; ${logoCornerCss(tokens.logoPosition)} }
 </style>`;
 }
 
@@ -274,10 +286,16 @@ const fontName = (f: string) => (f.split(",")[0] || "System").replace(/['"]/g, "
  * tokens & fonts — example slides + color palette + type scale. Shown alongside
  * the DESIGN.md prose so a brand reads as both a worked example and a spec.
  */
-export function brandGuideHtml(name: string, tokens: BrandTokens): string {
+export function brandGuideHtml(name: string, tokens: BrandTokens, logoSrc = ""): string {
   const c = tokens.colors;
   const swatch = (label: string, hex: string) =>
     `<div class="sw"><div class="chip" style="background:${css(hex)}"></div><div class="meta">${esc(label)}<div class="hex">${esc(hex)}</div></div></div>`;
+  const lp = tokens.logoPosition;
+  const logoCorner = `${lp.startsWith("top") ? "top:5%" : "bottom:5%"};${lp.endsWith("left") ? "left:6%" : "right:6%"}`;
+  const logoImg = logoSrc ? `<img class="logo" style="${logoCorner}" src="${esc(logoSrc)}" alt="" />` : "";
+  const logoSec = logoSrc
+    ? `<div class="sec"><h2>Logo</h2><div class="logobox">${logoImg}</div></div>`
+    : "";
 
   return `<!doctype html><html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 ${brandHead(tokens)}
@@ -288,7 +306,10 @@ ${brandHead(tokens)}
   h1.name{font:700 36px/1 var(--r-heading-font);color:#111;margin:8px 0 26px;letter-spacing:-1px}
   .sec{margin:26px 0}
   .sec h2{font:600 11px/1 var(--r-main-font);letter-spacing:.12em;text-transform:uppercase;color:#9a9a9a;margin:0 0 12px}
-  .slide{aspect-ratio:16/9;border-radius:14px;overflow:hidden;border:1px solid #eee;background:var(--brand-bg);padding:7% 8%;display:flex;flex-direction:column;justify-content:center}
+  .slide{position:relative;aspect-ratio:16/9;border-radius:14px;overflow:hidden;border:1px solid #eee;background:var(--brand-bg);padding:7% 8%;display:flex;flex-direction:column;justify-content:center}
+  .slide .logo{position:absolute;height:24px;opacity:.9}
+  .logobox{display:inline-flex;align-items:center;justify-content:center;padding:22px 26px;border:1px solid #eee;border-radius:12px;background:var(--brand-bg)}
+  .logobox .logo{height:40px;max-width:240px;object-fit:contain}
   .slide .k{font:600 13px/1 var(--r-heading-font);letter-spacing:.16em;text-transform:uppercase;color:var(--brand-accent)}
   .slide h3{font:700 clamp(28px,5vw,52px)/1.04 var(--r-heading-font);color:var(--brand-heading);margin:8px 0 0;letter-spacing:-1px}
   .slide p{font:400 clamp(14px,1.8vw,20px)/1.4 var(--r-main-font);color:var(--brand-muted);margin:12px 0 0;max-width:72%}
@@ -304,8 +325,9 @@ ${brandHead(tokens)}
   <h1 class="name">${esc(name)}</h1>
 
   <div class="sec"><h2>Example slide</h2>
-    <div class="slide"><div class="k">Your kicker</div><h3>Big bold title</h3><p>A supporting line in the body font and color, set on the brand canvas.</p></div>
+    <div class="slide"><div class="k">Your kicker</div><h3>Big bold title</h3><p>A supporting line in the body font and color, set on the brand canvas.</p>${logoImg}</div>
   </div>
+  ${logoSec}
 
   <div class="sec"><h2>Colors</h2>
     <div class="swatches">

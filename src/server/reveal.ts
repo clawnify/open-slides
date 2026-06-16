@@ -1,10 +1,9 @@
 // Builds a self-contained reveal.js HTML document from a deck. A deck is one
-// document split into slides on a line of `---`. Each slide is either:
-//   • Markdown (default) — rendered via reveal's markdown plugin, or
-//   • a designed HTML slide — when the chunk starts with `<!-- html -->`. An
-//     optional `<!-- .slide: ATTRS -->` line sets reveal slide attributes
-//     (e.g. data-background-image) on the <section>.
-// Markdown and HTML slides interleave freely.
+// document split into slides on a line of `---`. Every slide is a designed HTML
+// slide (markdown is not supported). A slide may begin with an optional
+// `<!-- .slide: ATTRS -->` line that sets reveal slide attributes (e.g.
+// data-background-image) on the <section>; a leading legacy `<!-- html -->`
+// marker is tolerated and stripped.
 //
 // Two modes:
 //   "view"  — interactive deck (editor preview + in-app fullscreen present).
@@ -83,25 +82,20 @@ function buildSections(content: string, only?: number): string {
   const sections: string[] = [];
 
   for (const chunk of chunks) {
-    if (/^<!--\s*html\s*-->/i.test(chunk.trim())) {
-      let rest = chunk.trim().replace(/^<!--\s*html\s*-->\s*\n?/i, "");
-      // Optional reveal slide attributes on the first remaining line.
-      let attrs = "";
-      const attrMatch = rest.match(/^<!--\s*\.slide:\s*([\s\S]*?)-->\s*\n?/i);
-      if (attrMatch) {
-        attrs = " " + attrMatch[1].trim();
-        rest = rest.slice(attrMatch[0].length);
-      }
-      sections.push(`<section class="design"${attrs}>\n${rest}\n</section>`);
-    } else {
-      const md = chunk.replace(/<\/textarea>/gi, "<\\/textarea>");
-      sections.push(
-        `<section class="md" data-markdown data-separator-notes="^Note:">\n<textarea data-template>\n${md}\n</textarea>\n</section>`,
-      );
+    // Every slide is a designed HTML slide. The legacy `<!-- html -->` marker is
+    // optional now; strip it plus an optional `<!-- .slide: ATTRS -->` line that
+    // sets reveal slide attributes (e.g. data-background-image) on the <section>.
+    let rest = chunk.trim().replace(/^<!--\s*html\s*-->\s*\n?/i, "");
+    let attrs = "";
+    const attrMatch = rest.match(/^<!--\s*\.slide:\s*([\s\S]*?)-->\s*\n?/i);
+    if (attrMatch) {
+      attrs = " " + attrMatch[1].trim();
+      rest = rest.slice(attrMatch[0].length);
     }
+    sections.push(`<section class="design"${attrs}>\n${rest}\n</section>`);
   }
 
-  return sections.join("\n") || `<section><h2>Empty deck</h2></section>`;
+  return sections.join("\n") || `<section class="design"><h2>Empty deck</h2></section>`;
 }
 
 interface DocOpts {
@@ -117,46 +111,94 @@ interface DocOpts {
   nav?: { arrows: boolean; progress: boolean; slideNumber: boolean };
 }
 
+// Deterministic PDF document: every slide is a fixed 1280x720 page block, content
+// at 1:1, paginated purely by CSS. We deliberately do NOT use reveal's print-pdf
+// mode — its layout scales to the render viewport and re-lays-out at page.pdf()
+// time, which makes Cloudflare's renderer overflow the page and surface stray
+// speaker-notes. Here there is no scaling: slides are authored at 1280x720 and
+// printed as-is. preferCSSPageSize + the @page rule give exact 16:9 pages.
+function buildPrintDoc(opts: DocOpts): string {
+  const showNum = !!(opts.nav && opts.nav.slideNumber);
+  const chunks = splitSlides(opts.content);
+  const total = chunks.length;
+  const clean = (s: string) => s.replace(/["<>]/g, "");
+  const slides =
+    chunks
+      .map((chunk, i) => {
+        let rest = chunk.trim().replace(/^<!--\s*html\s*-->\s*\n?/i, "");
+        let bg = "";
+        const m = rest.match(/^<!--\s*\.slide:\s*([\s\S]*?)-->\s*\n?/i);
+        if (m) {
+          rest = rest.slice(m[0].length);
+          const col = m[1].match(/data-background-color="([^"]*)"/i);
+          const grad = m[1].match(/data-background-gradient="([^"]*)"/i);
+          const img = m[1].match(/data-background-image="([^"]*)"/i);
+          if (col) bg += `background:${clean(col[1])};`;
+          if (grad) bg += `background:${clean(grad[1])};`;
+          if (img) bg += `background-image:url("${clean(img[1])}");background-size:cover;background-position:center;`;
+        }
+        const num = showNum ? `<div class="pdf-num">${i + 1} / ${total}</div>` : "";
+        return `<div class="pdf-slide" style="${bg}">\n${rest}\n${num}\n</div>`;
+      })
+      .join("\n") || `<div class="pdf-slide"></div>`;
+
+  return `<!doctype html><html><head><meta charset="utf-8" />
+<link rel="stylesheet" href="${REVEAL}/plugin/highlight/monokai.css" />
+<style>
+  @page { size: 1280px 720px; margin: 0; }
+  html,body{ margin:0; padding:0; }
+  body{ background: var(--brand-bg, #fff); color: var(--r-main-color, #111); font-family: var(--r-main-font, -apple-system, sans-serif); }
+  /* One fixed-size page per slide; content (often position:absolute;inset:0) fills it. */
+  .pdf-slide{ position: relative; width: 1280px; height: 720px; overflow: hidden; box-sizing: border-box; background: var(--brand-bg, #fff); break-after: page; page-break-after: always; }
+  .pdf-slide:last-child{ break-after: auto; page-break-after: avoid; }
+  .pdf-num{ position: absolute; bottom: 22px; right: 28px; font: 500 18px/1 var(--r-main-font); color: var(--brand-muted, #999); }
+  /* Brand helpers are scoped to .reveal in brandHead; redeclare unscoped here. */
+  .muted{ color: var(--brand-muted); }
+  .accent{ color: var(--brand-accent); }
+  .kicker{ font: 600 0.42em/1 var(--r-heading-font); letter-spacing: 0.18em; text-transform: uppercase; color: var(--brand-accent); }
+</style>
+${opts.brandHeadHtml}
+</head><body>
+${opts.brandLogoHtml}
+${slides}
+<script src="${REVEAL}/plugin/highlight/highlight.js"></script>
+<script>${CHART_FNS}</script>
+<script>
+  try { if (window.hljs) document.querySelectorAll('pre code').forEach(function (b) { hljs.highlightElement(b); }); } catch (e) {}
+  renderCharts(document);
+</script>
+</body></html>`;
+}
+
 export function revealDoc(opts: DocOpts): string {
+  if (opts.mode === "print") return buildPrintDoc(opts);
   const theme = safeTheme(opts.theme);
   const sections = buildSections(opts.content, opts.only);
 
-  const printShim =
-    opts.mode === "print"
-      ? `<script>try{history.pushState({},'','?print-pdf');}catch(e){}</script>`
-      : "";
-
-  // Fixed 16:9 design canvas. center:false so designed (absolute / left-aligned)
-  // slides aren't vertically re-centered by reveal — markdown slides get their
-  // own centering via the `.md` CSS below.
+  // Fixed 16:9 design canvas. center:false — designed slides position their own
+  // content (absolute / flex) inside the canvas, so reveal must not re-center.
+  // fragments:false so animated elements are always visible in the editor and
+  // thumbnails; the view harness turns fragments on only while presenting.
   const SIZING = "width: 1280, height: 720, margin: 0, center: false,";
 
   const harness =
-    opts.mode === "print"
+    opts.thumb
       ? `Reveal.initialize({
-           plugins: [RevealMarkdown, RevealHighlight],
+           plugins: [RevealHighlight],
            ${SIZING}
-           showNotes: false,
-           pdfMaxPagesPerSlide: 1,
-           pdfSeparateFragments: false,
-           controls: false,
-           progress: false,
-           slideNumber: ${opts.nav && opts.nav.slideNumber ? "'c/t'" : "false"},
-         }).then(function () { renderCharts(document); });`
-      : opts.thumb
-      ? `Reveal.initialize({
-           plugins: [RevealMarkdown, RevealHighlight],
-           ${SIZING}
+           fragments: false,
            controls: false, progress: false, embedded: false, transition: 'none',
            minScale: 0.05, maxScale: 1,
          }).then(function () { renderCharts(document); });`
       : `var params = new URLSearchParams(location.search);
+         var NAV = { arrows: ${opts.nav ? opts.nav.arrows : true}, progress: ${opts.nav ? opts.nav.progress : true} };
          Reveal.initialize({
-           plugins: [RevealMarkdown, RevealHighlight, RevealNotes],
+           plugins: [RevealHighlight, RevealNotes],
            ${SIZING}
+           fragments: false,
            embedded: false,
-           controls: ${opts.nav ? opts.nav.arrows : true},
-           progress: ${opts.nav ? opts.nav.progress : true},
+           controls: false,
+           progress: false,
            hash: false,
            slideNumber: ${opts.nav && !opts.nav.slideNumber ? "false" : "'c/t'"},
            transition: 'slide',
@@ -164,6 +206,16 @@ export function revealDoc(opts: DocOpts): string {
            var h = parseInt(params.get('h') || '0', 10) || 0;
            var v = parseInt(params.get('v') || '0', 10) || 0;
            if (h || v) Reveal.slide(h, v);
+           // Present mode = fullscreen. Only then do fragment animations play and
+           // the arrows + progress bar appear; in the editor canvas everything is
+           // visible and chrome-free, and clicks edit rather than navigate.
+           function presenting() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+           function syncPresentMode() {
+             var p = presenting();
+             Reveal.configure({ fragments: p, controls: p && NAV.arrows, progress: p && NAV.progress });
+           }
+           document.addEventListener('fullscreenchange', syncPresentMode);
+           document.addEventListener('webkitfullscreenchange', syncPresentMode);
            renderCharts(Reveal.getCurrentSlide());
            Reveal.on('slidechanged', function (e) { renderCharts(e.currentSlide); });
            Reveal.on('slidechanged', report);
@@ -196,6 +248,7 @@ export function revealDoc(opts: DocOpts): string {
            // empty background → change the slide's background.
            var TEXT = {H1:1,H2:1,H3:1,H4:1,H5:1,H6:1,P:1,LI:1,BLOCKQUOTE:1,SPAN:1,STRONG:1,EM:1,CODE:1,TD:1,TH:1,FIGCAPTION:1};
            document.addEventListener('click', function (e) {
+             if (presenting()) return; // presenting: clicks navigate, never edit
              if (e.target && e.target.isContentEditable) return; // already editing
              var node = e.target, img = null, textEl = null;
              while (node && node !== document.body) {
@@ -253,31 +306,23 @@ export function revealDoc(opts: DocOpts): string {
 <link rel="stylesheet" href="${REVEAL}/plugin/highlight/monokai.css" />
 <style>
   html,body{margin:0;padding:0;height:100%}
-  /* Screen layout only — lets reveal's transform-scale do its own thing in print.
-     Designed slides fill the section (which reveal sizes to the slide); markdown
-     slides are vertically centered. .past/.future keep centering during a
-     transition so the outgoing slide doesn't snap to top-left and flash. */
-  @media screen {
-    .reveal .slides { text-align: left; }
-    .reveal .slides > section { height: 100%; box-sizing: border-box; }
-    .reveal .slides > section.md.present,
-    .reveal .slides > section.md.past,
-    .reveal .slides > section.md.future {
-      display: flex !important; flex-direction: column;
-      justify-content: center; align-items: center; text-align: center; padding: 0 8%;
-    }
-    .reveal .slides > section.md > * { max-width: 100%; }
-  }
+  /* Slides are designed HTML, left-aligned by default; each slide positions its
+     own content (often with inset:0), so the section must fill the slide box in
+     EVERY mode. Use a descendant selector, not a direct child: in print reveal
+     moves each section into a pdf-page wrapper, so a direct-child selector would
+     stop matching and the slide would collapse and overflow onto the next PDF
+     page. height:100% resolves against the slides box (screen) and the sized
+     pdf-page (print), so each slide fills exactly one page. */
+  .reveal .slides { text-align: left; }
+  .reveal .slides section { height: 100%; box-sizing: border-box; }
 </style>
 ${opts.brandHeadHtml}
-${printShim}
 </head><body>
 ${opts.brandLogoHtml}
 <div class="reveal"><div class="slides">
 ${sections}
 </div></div>
 <script src="${REVEAL}/dist/reveal.js"></script>
-<script src="${REVEAL}/plugin/markdown/markdown.js"></script>
 <script src="${REVEAL}/plugin/highlight/highlight.js"></script>
 ${opts.mode === "view" && !opts.thumb ? `<script src="${REVEAL}/plugin/notes/notes.js"></script>` : ""}
 <script>${CHART_FNS}</script>

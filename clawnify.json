@@ -2,9 +2,9 @@
   "$schema": "https://app.clawnify.com/schema/v1/clawnify.json",
   "version": 1,
   "name": "Open Slides",
-  "description": "Open-source, agent-friendly slide deck maker. Write presentations in Markdown, drop in your own logos and images, present fullscreen right in the app, and export to PDF. Powered by reveal.js.",
+  "description": "Open-source, agent-friendly slide deck maker. Design on-brand slides, drop in your own logos and images, present fullscreen right in the app, and export to PDF. Powered by reveal.js.",
   "icon": "icon.svg",
-  "tags": ["slides", "presentation", "deck", "markdown", "reveal.js", "pdf"],
+  "tags": ["slides", "presentation", "deck", "reveal.js", "pdf"],
 
   "app": {
     "framework": "react+hono",
@@ -18,7 +18,7 @@
 
   "deploy": {
     "title": "Deploy your Open Slides",
-    "subtitle": "Write decks in Markdown, present fullscreen in the browser, and export to PDF.",
+    "subtitle": "Design on-brand decks, present fullscreen in the browser, and export to PDF.",
     "prompts": [
       {
         "key": "brand_name",

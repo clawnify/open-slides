@@ -1,6 +1,6 @@
--- Decks: a reveal.js presentation authored as Markdown. Slides are separated by
--- a line containing `---` (vertical stacks by `--`); speaker notes by `Note:`.
--- `theme` is a reveal.js theme name (white, black, league, …).
+-- Decks: a reveal.js presentation authored as designed HTML slides, separated
+-- by a line containing `---`. `theme` is a reveal.js theme name (white, black,
+-- league, …) used as the base under the brand's token overrides.
 CREATE TABLE IF NOT EXISTS decks (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
   title TEXT NOT NULL,
@@ -25,8 +25,10 @@ CREATE TABLE IF NOT EXISTS brands (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Media library: logos and images the user uploads. Stored in R2 under `key`;
--- the deck Markdown references them as `assets/<key>` (e.g. ![](assets/logo.png)).
+-- Media: images/video uploaded into a slide and brand logos. Stored in R2 under
+-- `key`; referenced from deck content / brand DESIGN.md as `assets/<key>` (e.g.
+-- ![](assets/logo.png)). There is no library — an asset lives only while it's
+-- referenced; the server garbage-collects orphans when the last reference goes.
 CREATE TABLE IF NOT EXISTS assets (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
   key TEXT NOT NULL UNIQUE,

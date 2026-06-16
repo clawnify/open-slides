@@ -99,11 +99,13 @@ app.put("/api/decks/:id", async (c) => {
     [b.title ?? existing.title, b.content ?? existing.content, b.theme ?? existing.theme, b.nav ?? existing.nav, b.brand_id ?? existing.brand_id, id],
   );
   const row = await get<Deck>("SELECT * FROM decks WHERE id = ?", [id]);
+  scheduleSweep(c); // a media reference may have just been removed
   return c.json(row);
 });
 
 app.delete("/api/decks/:id", async (c) => {
   await run("DELETE FROM decks WHERE id = ?", [c.req.param("id")]);
+  scheduleSweep(c);
   return c.json({ ok: true });
 });
 
@@ -212,12 +214,14 @@ app.put("/api/brands/:id", async (c) => {
   const nextMd = b.tokens ? setTokensInMd(existing.design_md, b.tokens) : (b.design_md ?? existing.design_md);
   await run("UPDATE brands SET name = ?, design_md = ?, updated_at = datetime('now') WHERE id = ?", [b.name ?? existing.name, nextMd, id]);
   const row = await get<Brand>("SELECT * FROM brands WHERE id = ?", [id]);
+  scheduleSweep(c); // the logo may have been changed or cleared
   return c.json({ id: row!.id, name: row!.name, design_md: row!.design_md, tokens: parseTokens(row!.design_md) });
 });
 
 app.delete("/api/brands/:id", async (c) => {
   await run("DELETE FROM brands WHERE id = ?", [c.req.param("id")]);
   await ensureBrands(); // never leave the library empty
+  scheduleSweep(c);
   return c.json({ ok: true });
 });
 
@@ -232,6 +236,7 @@ app.post("/api/brands/:id/prompt", async (c) => {
   try {
     const nextMd = await editBrand(c.env, { instruction: instruction.trim(), currentMd: existing.design_md });
     await run("UPDATE brands SET design_md = ?, updated_at = datetime('now') WHERE id = ?", [nextMd, id]);
+    scheduleSweep(c);
     return c.json({ id, name: existing.name, design_md: nextMd, tokens: parseTokens(nextMd) });
   } catch (err) {
     return c.json({ error: String(err instanceof Error ? err.message : err) }, 502);
@@ -243,7 +248,8 @@ app.post("/api/brands/:id/prompt", async (c) => {
 app.get("/api/brands/:id/preview", async (c) => {
   const row = await get<Brand>("SELECT * FROM brands WHERE id = ?", [c.req.param("id")]);
   const md = row?.design_md || DEFAULT_BRAND_MD;
-  return c.html(brandGuideHtml(row?.name || "Brand", parseTokens(md)));
+  const tokens = parseTokens(md);
+  return c.html(brandGuideHtml(row?.name || "Brand", tokens, resolveLogoForView(tokens.logo)));
 });
 
 // Designed, on-brand slide templates the client inserts into a deck.
@@ -288,7 +294,10 @@ app.get("/api/decks/:id/pdf", async (c) => {
   }
 });
 
-// ── Assets (media library) ───────────────────────────────────────────
+// ── Assets (media) ───────────────────────────────────────────────────
+// There is no media library: an asset exists only while a slide or a brand
+// logo references it (`assets/<key>`). Upload inserts a reference; removing the
+// last reference makes the asset an orphan, which the sweep deletes from R2.
 
 interface Asset {
   id: string;
@@ -298,11 +307,6 @@ interface Asset {
   size: number;
   created_at: string;
 }
-
-app.get("/api/assets", async (c) => {
-  const rows = await query<Asset>("SELECT * FROM assets ORDER BY created_at DESC");
-  return c.json(rows);
-});
 
 app.post("/api/assets", async (c) => {
   const body = await c.req.parseBody();
@@ -329,15 +333,6 @@ app.post("/api/assets", async (c) => {
   return c.json(row, 201);
 });
 
-app.delete("/api/assets/:id", async (c) => {
-  const row = await get<Asset>("SELECT * FROM assets WHERE id = ?", [c.req.param("id")]);
-  if (row) {
-    await deleteUpload(row.key);
-    await run("DELETE FROM assets WHERE id = ?", [row.id]);
-  }
-  return c.json({ ok: true });
-});
-
 app.get("/api/uploads/:key", async (c) => {
   const obj = await getUpload(c.req.param("key"));
   if (!obj) return c.json({ error: "Not found" }, 404);
@@ -352,6 +347,41 @@ function lower8(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(4)))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+const ASSET_REF_RE = /assets\/([A-Za-z0-9._-]+)/g;
+
+// Delete any asset no slide or brand logo references anymore (garbage-collect
+// media removed from the deck). A short grace period spares freshly-uploaded
+// assets whose reference hasn't been saved yet (the editor saves on a debounce).
+async function sweepOrphanAssets(): Promise<void> {
+  const stale = await query<{ id: string; key: string }>(
+    "SELECT id, key FROM assets WHERE created_at < datetime('now', '-120 seconds')",
+  );
+  if (stale.length === 0) return;
+
+  const used = new Set<string>();
+  const collect = (s: string) => {
+    for (const m of s.matchAll(ASSET_REF_RE)) used.add(m[1]);
+  };
+  for (const d of await query<{ content: string }>("SELECT content FROM decks")) collect(d.content);
+  for (const b of await query<{ design_md: string }>("SELECT design_md FROM brands")) collect(b.design_md);
+
+  for (const a of stale) {
+    if (used.has(a.key)) continue;
+    await deleteUpload(a.key);
+    await run("DELETE FROM assets WHERE id = ?", [a.id]);
+  }
+}
+
+// Run the sweep without blocking the response when possible.
+function scheduleSweep(c: { executionCtx?: { waitUntil(p: Promise<unknown>): void } }): void {
+  const p = sweepOrphanAssets().catch((e) => console.error("asset sweep failed", e));
+  try {
+    c.executionCtx?.waitUntil(p);
+  } catch {
+    /* no execution context (e.g. some dev paths) — the promise still runs */
+  }
 }
 
 // View mode: media is same-origin with the app, so point `assets/<key>` at the

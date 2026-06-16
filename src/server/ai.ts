@@ -49,12 +49,11 @@ function systemPrompt(tokens: BrandTokens, designMd: string, templates: SlideTem
 
 ## Output format
 A deck is one document. Slides are separated by a line containing only \`---\`.
-Each slide is EITHER:
-1. Markdown (default) — good for quick text slides. Standard markdown. Speaker notes start a line with \`Note:\`.
-2. A DESIGNED slide — when the slide starts with the exact line \`<!-- html -->\`. Use this for visually rich, on-brand layouts.
+EVERY slide is a designed HTML slide laying out a full 1280x720 canvas. Do NOT
+write markdown — it is not supported.
 
-## Designed slide rules (prefer these for polished decks)
-- Lay out a full 1280x720 canvas. Wrap content in:
+## Designed slide rules
+- Wrap each slide's content in:
   \`<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;text-align:left;padding:0 9%;box-sizing:border-box"> ... </div>\`
 - Style with the BRAND CSS VARIABLES (never hardcode brand colors/fonts):
   --brand-bg, --brand-text, --brand-heading, --brand-accent, --brand-muted,
@@ -62,8 +61,9 @@ Each slide is EITHER:
   --r-heading-font (display font), --r-main-font (body font).
   Example title: \`<h1 style="font:700 var(--brand-hero-size)/1.02 var(--r-heading-font);color:var(--brand-heading)">...</h1>\`
   Use \`class="kicker"\` for a small uppercase accent eyebrow.
-- Per-slide background (optional): put \`<!-- .slide: data-background-color="#xxxxxx" -->\` right after \`<!-- html -->\` (or as the first line of a markdown slide). You may also use data-background-gradient or data-background-image="assets/<name>".
-- Entrance animations (optional): add \`class="fragment fade-up"\` to elements that should animate in on click. Effects: fade-up, fade-down, fade-left, fade-right, zoom-in, grow.
+- Per-slide background (optional): put \`<!-- .slide: data-background-color="#xxxxxx" -->\` as the slide's FIRST line. You may also use data-background-gradient or data-background-image="assets/<name>".
+- Speaker notes (optional): add \`<aside class="notes">…</aside>\` inside the slide; it shows only in the presenter view, never on the slide or in the PDF.
+- Entrance animations (optional): add \`class="fragment fade-up"\` to elements that should animate in on click. Effects: fade-up, fade-down, fade-left, fade-right, zoom-in, grow. They play only while presenting.
 - Charts: to show data, add \`<div class="chart" style="height:380px" data-chart='{"type":"bar","labels":["Q1","Q2"],"data":[12,19]}'></div>\` — type is bar | line | donut. It renders as on-brand SVG automatically; do NOT add your own colors or styling inside it. Give the chart div a height (or flex:1 with min-height:0 inside a flex column).
 - Only reference images the user explicitly provides as \`assets/<name>\`; otherwise omit images.
 
