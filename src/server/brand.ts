@@ -447,6 +447,8 @@ ${brandHead(tokens)}
   .slidecanvas :is(p,li,blockquote){font:400 var(--brand-body-size)/1.5 var(--r-main-font);color:var(--brand-text)}
   .slidecanvas .kicker{font:600 calc(var(--brand-body-size)*0.66)/1 var(--r-heading-font);letter-spacing:.16em;text-transform:uppercase;color:var(--brand-accent)}
   .slidecanvas .logo{position:absolute;height:44px;max-width:220px;object-fit:contain;opacity:.92}
+  .slidecanvas .infographic{flex:0 1 auto;min-height:0}
+  .slidecanvas .infographic svg{font-family:var(--r-main-font)}
   .slidecanvas .muted{color:var(--brand-muted)} .slidecanvas .accent{color:var(--brand-accent)}
   .swatches{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
   .sw{border:1px solid #eee;border-radius:10px;overflow:hidden}

@@ -53,7 +53,10 @@ function cleanSvg(raw: string): string {
   const i = raw.indexOf("<svg");
   if (i < 0) return "";
   let svg = raw.slice(i);
-  const sizeCss = "width:100%;height:100%;display:block";
+  // Size to the SVG's intrinsic ratio (from its viewBox): full width, natural
+  // height — so a wide/short infographic stays short instead of ballooning to
+  // fill a flex:1 box. Cap the height so a tall template can't overflow the slide.
+  const sizeCss = "width:100%;height:auto;max-height:440px;display:block;margin:0 auto";
   svg = svg.replace(/<svg\b([^>]*)>/, (_m, attrs: string) => {
     let a = attrs.replace(/\s(?:width|height)="[^"]*"/g, "");
     if (/\sstyle="/.test(a)) a = a.replace(/\sstyle="([^"]*)"/, (_s, st) => ` style="${st};${sizeCss}"`);

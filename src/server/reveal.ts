@@ -162,6 +162,8 @@ function buildPrintDoc(opts: DocOpts): string {
   .pdf-slide h2{ font-size: var(--brand-subheading-size); }
   .pdf-slide h3{ font-size: calc(var(--brand-subheading-size) * 0.82); }
   .pdf-slide :is(p, li, blockquote, td, th, figcaption){ font-size: var(--brand-body-size); }
+  .pdf-slide .infographic{ flex: 0 1 auto !important; min-height: 0; }
+  .pdf-slide .infographic svg{ font-family: var(--r-main-font); }
   .pdf-slide:last-child{ break-after: auto; page-break-after: avoid; }
   .pdf-num{ position: absolute; bottom: 22px; right: 28px; font: 500 18px/1 var(--r-main-font); color: var(--brand-muted, #999); }
   /* Speaker notes are presenter-only; never print them (reveal hides them in the
@@ -384,6 +386,10 @@ export function revealDoc(opts: DocOpts): string {
   .reveal .slides section.design h2 { font-size: var(--brand-subheading-size); }
   .reveal .slides section.design h3 { font-size: calc(var(--brand-subheading-size) * 0.82); }
   .reveal .slides section.design :is(p, li, blockquote, td, th, figcaption) { font-size: var(--brand-body-size); }
+  /* Infographics: don't let the box balloon (override an authored flex:1) so it
+     takes the SVG's natural height; use the brand font instead of antv's default. */
+  .reveal .slides section.design .infographic { flex: 0 1 auto !important; min-height: 0; }
+  .reveal .slides section.design .infographic svg { font-family: var(--r-main-font); }
   /* Centered dots paginator — present-only, on-brand. Shown via JS only while
      presenting (like the arrows + progress bar); hidden in the editor and PDF. */
   .sv-dots{ position: fixed; left: 0; right: 0; bottom: 26px; z-index: 40;
