@@ -629,6 +629,13 @@ export function App() {
     const id = selectedId;
     setGenLoading(true);
     try {
+      // Flush pending edits FIRST so the agent reads the latest deck (it reads
+      // from the server). Inline canvas edits save on a 500ms debounce, and
+      // clicking Generate blurs the editor which commits that last edit via an
+      // async postMessage — so yield briefly to let it land, then save now.
+      await new Promise((r) => setTimeout(r, 60));
+      if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+      await save(slidesRef.current, titleRef.current, navRef.current, true);
       const res = await fetch(`/api/decks/${id}/generate`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt, current_index: selRef.current }),
