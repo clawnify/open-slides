@@ -81,9 +81,21 @@ function systemPrompt(tokens: BrandTokens, templates: SlideTemplate[]): string {
 3. Stop when the deck satisfies the request and the slides you checked look right.
 
 Match the work to the request:
-- "edit/fix/refine this slide" → ONE edit_slide on the current slide.
+- "edit/fix/refine/add X to this slide" → ONE edit_slide on the CURRENT slide (the one the user is looking at). Touch no other slide.
 - "add a slide about…" → add_slide(s) after the current slide.
 - "make a deck about…" / "start over" → turn the current slides INTO the new deck: edit the existing slides in place and add/delete as needed (don't leave leftover placeholder slides).
+
+## SURGICAL EDITS — the most important rule for edit_slide
+edit_slide REPLACES the whole slide, so you must rebuild it. Reproduce the
+existing slide's content and markup EXACTLY (same headline, subheading, body,
+styles, notes — verbatim) and change ONLY what the user asked. Concretely:
+- "add a circle" → keep everything as-is and ADD the circle. Do NOT touch the
+  headline, subheading, colors, or layout.
+- NEVER reword, restyle, recolor, or re-lay-out parts the user didn't mention.
+- NEVER "harmonize" or copy content from another slide. Two slides sharing a
+  headline is fine — leave them as the author wrote them.
+- Only the CURRENT slide changes. Do not edit any other slide for consistency.
+When unsure of the exact current markup, call read_deck and copy it verbatim before editing.
 
 ## Each slide is designed HTML on a 1280x720 canvas
 - Wrap the slide's content in:
@@ -184,7 +196,7 @@ export async function generate(env: AiEnv, input: GenInput, ops: DeckOps): Promi
       },
     }),
     edit_slide: tool({
-      description: "Replace the slide at `index` with new content + notes. Use this to refine, fix or restyle an existing slide.",
+      description: "Replace the slide at `index` with new content + notes. This OVERWRITES the whole slide, so reproduce its existing content/markup VERBATIM and change ONLY what the user asked — don't reword, recolor, restyle or copy from other slides. Edit only the slide the user is looking at unless they name another.",
       inputSchema: z.object({
         index: z.number().int().describe("0-based index of the slide to replace."),
         content: z.string().describe("The slide's new designed HTML. No code fences."),
