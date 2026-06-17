@@ -20,7 +20,7 @@ const REVEAL = "https://cdn.jsdelivr.net/npm/reveal.js@5.1.0";
 // This script computes & draws an on-brand SVG (bar / line / donut) into it,
 // picking up the brand accent/muted colors. SVG renders identically in the
 // canvas, while presenting, and in the exported PDF.
-const CHART_FNS = `
+export const CHART_FNS = `
   function _bv(n,f){var v=getComputedStyle(document.documentElement).getPropertyValue(n).trim();return v||f;}
   function _arc(cx,cy,r,ir,a0,a1,fill){
     function p(rad,a){return [cx+rad*Math.cos(a),cy+rad*Math.sin(a)];}

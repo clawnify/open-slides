@@ -10,7 +10,7 @@ import {
 } from "./uploads";
 import { revealDoc } from "./reveal";
 import { renderDeckPdf, renderSlidePng, PdfRenderError } from "./pdf";
-import { parseTokens, brandHead, brandLogoTag, brandGuideHtml, setTokensInMd, DEFAULT_BRAND_MD, type BrandTokens } from "./brand";
+import { parseTokens, brandHead, brandLogoTag, brandGuideHtml, extractExampleSlides, setTokensInMd, DEFAULT_BRAND_MD, type BrandTokens } from "./brand";
 import { TEMPLATES } from "./templates";
 import { generate, editBrand, hasAiKey, type DeckOps, type DeckSlide, type AuthoredSlide, type BrandOps, type BrandTokensPatch } from "./ai";
 import { bakeInfographics } from "./infographic";
@@ -393,7 +393,13 @@ app.get("/api/brands/:id/preview", async (c) => {
   const row = await get<Brand>("SELECT * FROM brands WHERE id = ?", [c.req.param("id")]);
   const md = row?.design_md || DEFAULT_BRAND_MD;
   const tokens = parseTokens(md);
-  return c.html(brandGuideHtml(row?.name || "Brand", tokens, resolveLogoForView(tokens.logo)));
+  // The preview renders the DESIGN.md's own example slides — bake infographics and
+  // point media at the served route so they look exactly like real slides.
+  const theme = { colorPrimary: tokens.colors.accent, colorBg: tokens.colors.bg };
+  const examples = await Promise.all(
+    extractExampleSlides(md).map(async (ex) => rewriteAssetsForView(await bakeInfographics(ex, theme))),
+  );
+  return c.html(brandGuideHtml(row?.name || "Brand", tokens, resolveLogoForView(tokens.logo), examples));
 });
 
 // Designed, on-brand slide templates the client inserts into a deck.

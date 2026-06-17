@@ -6,6 +6,8 @@
 // The tokens block is a fenced ```clawnify-brand JSON object inside the
 // DESIGN.md. Prose around it guides the agent; the JSON drives rendering.
 
+import { CHART_FNS } from "./reveal";
+
 export interface BrandTokens {
   colors: { bg: string; text: string; heading: string; accent: string; muted: string };
   fonts: { heading: string; body: string; mono: string; google: string[] };
@@ -357,7 +359,24 @@ const fontName = (f: string) => (f.split(",")[0] || "System").replace(/['"]/g, "
  * tokens & fonts — example slides + color palette + type scale. Shown alongside
  * the DESIGN.md prose so a brand reads as both a worked example and a spec.
  */
-export function brandGuideHtml(name: string, tokens: BrandTokens, logoSrc = ""): string {
+// The example slide HTML blocks authored in the DESIGN.md "## Example slides"
+// section. The brand preview renders THESE (not a hardcoded mockup), so the
+// preview faithfully represents the design system and reflects edits — e.g. the
+// agent removing the accent kicker from an example shows up immediately.
+export function extractExampleSlides(designMd: string): string[] {
+  const sec = designMd.match(/##\s+Example slides[^\n]*\n([\s\S]*?)(?=\n##\s|$)/i);
+  if (!sec) return [];
+  const out: string[] = [];
+  const re = /```(?:html)?\s*\n([\s\S]*?)```/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(sec[1]))) {
+    const html = m[1].trim();
+    if (html) out.push(html);
+  }
+  return out;
+}
+
+export function brandGuideHtml(name: string, tokens: BrandTokens, logoSrc = "", examples: string[] = []): string {
   const c = tokens.colors;
   // The example slide is a scaled-down 1280-wide canvas, so size its title/body
   // in container units derived from the px tokens (1 canvas px = 100/1280 cqw of
@@ -377,6 +396,16 @@ export function brandGuideHtml(name: string, tokens: BrandTokens, logoSrc = ""):
     ? `<div class="sec"><h2>Logo</h2><div class="logobox">${logoImg}</div></div>`
     : "";
 
+  // Render the DESIGN.md's own example slides (true 1280x720 canvases, scaled by
+  // JS). Falls back to a single hardcoded mockup when the brand has no examples.
+  const examplesSec = examples.length
+    ? `<div class="sec"><h2>Example slides</h2>${examples
+        .map((ex) => `<div class="slideframe"><div class="slidecanvas">${ex}${logoImg}</div></div>`)
+        .join("")}</div>`
+    : `<div class="sec"><h2>Example slide</h2>
+    <div class="slide"><div class="k">Your kicker</div><h3>Big bold title</h3><p>A supporting line in the body font and color, set on the brand canvas.</p>${logoImg}</div>
+  </div>`;
+
   return `<!doctype html><html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 ${brandHead(tokens)}
 <style>
@@ -393,6 +422,19 @@ ${brandHead(tokens)}
   .slide .k{font:600 13px/1 var(--r-heading-font);letter-spacing:.16em;text-transform:uppercase;color:var(--brand-accent)}
   .slide h3{font:700 ${headingCqw}cqw/1.04 var(--r-heading-font);color:var(--brand-heading);margin:8px 0 0;letter-spacing:-1px}
   .slide p{font:400 ${bodyCqw}cqw/1.4 var(--r-main-font);color:var(--brand-muted);margin:12px 0 0;max-width:72%}
+  /* Real DESIGN.md example slides: a true 1280x720 canvas scaled to fit (JS sets
+     the transform). Type scale + alignment mirror the deck defaults so plain
+     h1/h2/p inherit the brand. */
+  .slideframe{position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;border:1px solid #eee;border-radius:14px;background:var(--brand-bg);margin-bottom:12px}
+  .slidecanvas{position:absolute;top:0;left:0;width:1280px;height:720px;transform-origin:top left;overflow:hidden;text-align:var(--brand-align,left)}
+  .slidecanvas > div{align-items:var(--brand-justify,flex-start);text-align:var(--brand-align,left)}
+  .slidecanvas h1{font:700 var(--brand-heading-size)/1.04 var(--r-heading-font);color:var(--brand-heading);letter-spacing:-1px}
+  .slidecanvas h2{font:700 var(--brand-subheading-size)/1.1 var(--r-heading-font);color:var(--brand-heading)}
+  .slidecanvas h3{font:700 calc(var(--brand-subheading-size)*0.82)/1.12 var(--r-heading-font);color:var(--brand-heading)}
+  .slidecanvas :is(p,li,blockquote){font:400 var(--brand-body-size)/1.5 var(--r-main-font);color:var(--brand-text)}
+  .slidecanvas .kicker{font:600 calc(var(--brand-body-size)*0.66)/1 var(--r-heading-font);letter-spacing:.16em;text-transform:uppercase;color:var(--brand-accent)}
+  .slidecanvas .logo{position:absolute;height:44px;max-width:220px;object-fit:contain;opacity:.92}
+  .slidecanvas .muted{color:var(--brand-muted)} .slidecanvas .accent{color:var(--brand-accent)}
   .swatches{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
   .sw{border:1px solid #eee;border-radius:10px;overflow:hidden}
   .sw .chip{height:44px}
@@ -405,9 +447,7 @@ ${brandHead(tokens)}
   <div class="kicker">Brand guidelines</div>
   <h1 class="name">${esc(name)}</h1>
 
-  <div class="sec"><h2>Example slide</h2>
-    <div class="slide"><div class="k">Your kicker</div><h3>Big bold title</h3><p>A supporting line in the body font and color, set on the brand canvas.</p>${logoImg}</div>
-  </div>
+  ${examplesSec}
   ${logoSec}
 
   <div class="sec"><h2>Colors</h2>
@@ -424,5 +464,12 @@ ${brandHead(tokens)}
     <div class="row"><div class="lbl">Paragraph · ${esc(fontName(tokens.fonts.body))} · ${bodyPx}px</div>
       <div class="spec" style="font:400 ${bodyPx}px/1.5 var(--r-main-font);color:var(--brand-text)">The quick brown fox jumps over the lazy dog.</div></div>
   </div>
-</div></body></html>`;
+</div>
+<script>${CHART_FNS}</script>
+<script>
+  function scaleSlides(){document.querySelectorAll('.slideframe').forEach(function(f){var c=f.querySelector('.slidecanvas');if(c)c.style.transform='scale('+(f.clientWidth/1280)+')';});}
+  try{ renderCharts(document); }catch(e){}
+  scaleSlides(); addEventListener('resize', scaleSlides);
+</script>
+</body></html>`;
 }
