@@ -367,6 +367,10 @@ export function revealDoc(opts: DocOpts): string {
      a left-aligned data slide while the brand default is centered. No !important,
      so inline per-slide styles win. */
   .reveal .slides section.design > div { text-align: var(--brand-align, left); align-items: var(--brand-justify, flex-start); }
+  /* reveal's base themes force UPPERCASE on headings — show authored case instead
+     (a slide/brand can still opt into uppercase via its own text-transform). The
+     kicker keeps its own uppercase rule. */
+  .reveal .slides section.design :is(h1, h2, h3, h4, h5, h6) { text-transform: none; }
   .reveal .slides section.design h1 { font-size: var(--brand-heading-size); }
   .reveal .slides section.design h2 { font-size: var(--brand-subheading-size); }
   .reveal .slides section.design h3 { font-size: calc(var(--brand-subheading-size) * 0.82); }

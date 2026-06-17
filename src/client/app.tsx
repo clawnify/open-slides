@@ -17,6 +17,8 @@ import {
   ArrowLeft,
   Check,
   ImagePlus,
+  Undo2,
+  Redo2,
 } from "lucide-react";
 
 // Open a file picker and upload the chosen file as an asset. Resolves to the
@@ -280,6 +282,17 @@ export function App() {
   const rendered = useRef("");
   const instructionsRef = useRef(""); // fresh value for the debounced save closure
 
+  // Undo/redo history of the slides array. Speaker notes live inside each slide's
+  // HTML (the <aside class="notes">), so snapshotting `slides` covers both.
+  const undoStack = useRef<string[][]>([]);
+  const redoStack = useRef<string[][]>([]);
+  const coalesceKey = useRef<string | null>(null); // group rapid same-key edits (notes typing) into one step
+  const coalesceAt = useRef(0);
+  const undoRef = useRef<() => void>(() => {});
+  const redoRef = useRef<() => void>(() => {});
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
   const selected = decks.find((d) => d.id === selectedId) ?? null;
   const content = joinSlides(slides);
 
@@ -352,6 +365,7 @@ export function App() {
     setSelEl(null);
     setBrandId(d.brand_id ?? null); // reflect the deck's actual brand in the inspector
     setInstructions(d.instructions ?? ""); instructionsRef.current = d.instructions ?? "";
+    resetHistory(); // history is per-deck
     setNav(parseNavMode(d.nav));
     rendered.current = d.content;
     setViewKey((k) => k + 1);
@@ -385,13 +399,57 @@ export function App() {
     setInstructions(v); instructionsRef.current = v;
     scheduleSave(slides, title, nav, true);
   }
+  // ── undo / redo ──
+  function syncHist() { setCanUndo(undoStack.current.length > 0); setCanRedo(redoStack.current.length > 0); }
+  // The single entry point for every slide change. Records the pre-change state
+  // for undo (coalescing rapid same-key edits), then applies + saves.
+  function commitSlides(next: string[], opts: { key?: string; quiet?: boolean } = {}) {
+    const now = Date.now();
+    const coalesce = !!opts.key && opts.key === coalesceKey.current && now - coalesceAt.current < 700;
+    if (!coalesce) {
+      undoStack.current.push(slidesRef.current);
+      if (undoStack.current.length > 100) undoStack.current.shift();
+      redoStack.current = [];
+    }
+    coalesceKey.current = opts.key ?? null;
+    coalesceAt.current = now;
+    slidesRef.current = next; // keep fresh for the next commit in the same tick
+    setSlides(next);
+    scheduleSave(next, title, nav, !!opts.quiet);
+    syncHist();
+  }
+  function restoreSlides(target: string[]) {
+    coalesceKey.current = null;
+    slidesRef.current = target;
+    setSlides(target);
+    setSel((s) => Math.max(0, Math.min(s, target.length - 1)));
+    setSelEl(null);
+    rendered.current = joinSlides(target);
+    setViewKey((k) => k + 1); // reflect the restore on the canvas immediately
+    scheduleSave(target, title, nav, true); // persist (quiet — we already bumped)
+  }
+  function undo() {
+    if (!undoStack.current.length) return;
+    redoStack.current.push(slidesRef.current);
+    restoreSlides(undoStack.current.pop()!);
+    syncHist();
+  }
+  function redo() {
+    if (!redoStack.current.length) return;
+    undoStack.current.push(slidesRef.current);
+    restoreSlides(redoStack.current.pop()!);
+    syncHist();
+  }
+  function resetHistory() { undoStack.current = []; redoStack.current = []; coalesceKey.current = null; syncHist(); }
+  undoRef.current = undo;
+  redoRef.current = redo;
+
   function applyToSlide(i: number, fn: (c: string) => string) {
     const next = slides.slice();
     next[i] = fn(next[i] ?? "");
-    setSlides(next);
-    scheduleSave(next);
+    commitSlides(next);
   }
-  function setSlidesAndSave(next: string[]) { setSlides(next); scheduleSave(next); }
+  function setSlidesAndSave(next: string[]) { commitSlides(next); }
 
   // ── click-to-edit write-backs ──
   function onElEdit(sid: number, _oldText: string, newText: string) {
@@ -511,6 +569,25 @@ export function App() {
       document.removeEventListener("webkitfullscreenchange", onFs as EventListener);
     };
   }, []);
+
+  // Undo/redo keyboard shortcuts (Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z or Ctrl+Y). Skip
+  // when a text field is focused so native text undo still works there.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const k = e.key.toLowerCase();
+      const isRedo = (k === "z" && e.shiftKey) || k === "y";
+      const isUndo = k === "z" && !e.shiftKey;
+      if (!isUndo && !isRedo) return;
+      const t = e.target as HTMLElement | null;
+      const tag = (t?.tagName || "").toLowerCase();
+      if (tag === "textarea" || tag === "input" || t?.isContentEditable) return;
+      e.preventDefault();
+      (isRedo ? redoRef.current : undoRef.current)();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   async function exportPdf() {
     if (!selectedId) return;
     setExporting(true);
@@ -533,8 +610,8 @@ export function App() {
     setNoteDraft(text);
     const next = slides.slice();
     next[sel] = setNotes(next[sel] ?? "", text);
-    setSlides(next);
-    scheduleSave(next, title, nav, true); // notes don't change the rendered slide
+    // quiet (notes don't change the rendered slide) + coalesce a typing burst into one undo step
+    commitSlides(next, { key: `notes:${sel}`, quiet: true });
   }
 
   // ── AI generate (multi-step agent loop, streamed) ──
@@ -556,6 +633,11 @@ export function App() {
         return;
       }
       setPrompt("");
+      // One undo entry for the whole generation: snapshot the pre-gen deck now;
+      // the streamed slides below don't each record (the server owns persistence).
+      undoStack.current.push(slidesRef.current);
+      if (undoStack.current.length > 100) undoStack.current.shift();
+      redoStack.current = []; coalesceKey.current = null; syncHist();
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = "";
@@ -573,7 +655,9 @@ export function App() {
           if (ev.type === "slide") {
             const s = splitSlides(ev.content);
             rendered.current = ev.content; // server already persisted; keep save() in sync
-            setSlides(s.length ? s : [ev.content]);
+            const applied = s.length ? s : [ev.content];
+            slidesRef.current = applied; // keep undo's "current" in sync during streaming
+            setSlides(applied);
             const idx = Math.min(ev.sel ?? 0, Math.max(0, (s.length || 1) - 1));
             setSel(idx); selRef.current = idx;
             setViewKey((k) => k + 1); // show the slide that just changed
@@ -657,6 +741,14 @@ export function App() {
             className="ml-1 w-44 rounded px-2 py-1 text-sm text-neutral-500 outline-none hover:bg-neutral-100 focus:bg-neutral-100" placeholder="Deck title" />
         )}
         <div className="flex-1" />
+        {selected && page === "deck" && (
+          <div className="mr-1 flex items-center">
+            <button onClick={() => undoRef.current()} disabled={!canUndo} title="Undo (⌘Z)"
+              className="grid h-8 w-8 place-items-center rounded-md text-neutral-600 hover:bg-neutral-100 disabled:opacity-30 disabled:hover:bg-transparent"><Undo2 size={15} /></button>
+            <button onClick={() => redoRef.current()} disabled={!canRedo} title="Redo (⌘⇧Z)"
+              className="grid h-8 w-8 place-items-center rounded-md text-neutral-600 hover:bg-neutral-100 disabled:opacity-30 disabled:hover:bg-transparent"><Redo2 size={15} /></button>
+          </div>
+        )}
         <span className="mr-1 text-xs text-neutral-400">{saving ? "Saving…" : selected ? `${slides.length} slides` : ""}</span>
         <button onClick={() => setPage(page === "brands" ? "deck" : "brands")} className={`flex h-8 items-center gap-1.5 rounded-md border px-3 text-sm ${page === "brands" ? "border-neutral-900 bg-neutral-900 text-white" : "border-neutral-200 hover:bg-neutral-50"}`}>
           <Palette size={14} /> Brands
