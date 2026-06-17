@@ -232,8 +232,15 @@ export function revealDoc(opts: DocOpts): string {
            function presenting() { return presentFlag || !!(document.fullscreenElement || document.webkitFullscreenElement); }
            function syncPresentMode() {
              var p = presenting();
+             // Switching fragments on (entering present) hides the already-visible
+             // fragments on the current slide — which would animate them backwards
+             // (a fade-up looks like fade-down). Kill fragment transitions across
+             // the switch, then restore them so later clicks animate normally.
+             var rv = document.querySelector('.reveal');
+             if (rv) rv.classList.add('no-frag-anim');
              Reveal.configure({ fragments: p, controls: p && NAV.arrows, progress: p && NAV.progress });
              if (dotsEl) dotsEl.style.display = (p && NAV.dots) ? 'flex' : 'none';
+             setTimeout(function () { if (rv) rv.classList.remove('no-frag-anim'); }, 60);
            }
            // Centered dots paginator: one dot per slide, click to jump. Built
            // once, refreshed on slide add/remove, active dot tracks the position.
@@ -371,6 +378,8 @@ export function revealDoc(opts: DocOpts): string {
      (a slide/brand can still opt into uppercase via its own text-transform). The
      kicker keeps its own uppercase rule. */
   .reveal .slides section.design :is(h1, h2, h3, h4, h5, h6) { text-transform: none; }
+  /* Suppress fragment transitions while toggling present mode (see syncPresentMode). */
+  .reveal.no-frag-anim .fragment { transition: none !important; }
   .reveal .slides section.design h1 { font-size: var(--brand-heading-size); }
   .reveal .slides section.design h2 { font-size: var(--brand-subheading-size); }
   .reveal .slides section.design h3 { font-size: calc(var(--brand-subheading-size) * 0.82); }

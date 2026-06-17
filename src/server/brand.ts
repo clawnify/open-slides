@@ -334,6 +334,19 @@ export function brandHead(tokens: BrandTokens): string {
     --brand-radius: ${css(tokens.radius)};
     --brand-align: ${tokens.textAlign === "center" ? "center" : "left"};
     --brand-justify: ${tokens.textAlign === "center" ? "center" : "flex-start"};
+    /* Friendly aliases: slides authored with the intuitive --color-*/--font-*/
+       --size-* names (e.g. by the brand agent) resolve to the brand tokens too.
+       Sizes are unitless so "var(--size-heading)px" works. */
+    --color-bg: ${css(c.bg)};
+    --color-text: ${css(c.text)};
+    --color-heading: ${css(c.heading)};
+    --color-accent: ${css(c.accent)};
+    --color-muted: ${css(c.muted)};
+    --font-heading: ${fontStack(tokens.fonts.heading, "sans")};
+    --font-body: ${fontStack(tokens.fonts.body, "sans")};
+    --size-heading: ${Math.round(tokens.sizes.heading)};
+    --size-subheading: ${Math.round(tokens.sizes.subheading)};
+    --size-body: ${Math.round(tokens.sizes.body)};
   }
   .reveal .muted { color: var(--brand-muted); }
   .reveal .accent { color: var(--brand-accent); }
