@@ -339,11 +339,15 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // refs so the (once-bound) message handler reads fresh state
+  // refs so the (once-bound) message handler + debounced saves read fresh state
   const slidesRef = useRef<string[]>([]);
   const selRef = useRef(0);
+  const titleRef = useRef("");
+  const navRef = useRef<Nav>({ ...DEFAULT_NAV });
   useEffect(() => { slidesRef.current = slides; }, [slides]);
   useEffect(() => { selRef.current = sel; }, [sel]);
+  useEffect(() => { titleRef.current = title; }, [title]);
+  useEffect(() => { navRef.current = nav; }, [nav]);
 
   // The canvas src must NOT depend on `sel`: slide navigation goes through
   // postMessage (gotoSlide), so reacting to `sel` here would reload the iframe on
@@ -359,14 +363,16 @@ export function App() {
     setSelectedId(d.id);
     setTitle(d.title);
     const s = splitSlides(d.content);
-    setSlides(s.length ? s : [""]);
+    const initial = s.length ? s : [""];
+    setSlides(initial); slidesRef.current = initial; // keep the once-bound handler in sync
     setSel(0);
     selRef.current = 0; // keep the canvasSrc memo from restoring the prior deck's slide
     setSelEl(null);
     setBrandId(d.brand_id ?? null); // reflect the deck's actual brand in the inspector
     setInstructions(d.instructions ?? ""); instructionsRef.current = d.instructions ?? "";
     resetHistory(); // history is per-deck
-    setNav(parseNavMode(d.nav));
+    titleRef.current = d.title;
+    const nv = parseNavMode(d.nav); navRef.current = nv; setNav(nv);
     rendered.current = d.content;
     setViewKey((k) => k + 1);
     setDecksOpen(false);
@@ -415,7 +421,7 @@ export function App() {
     coalesceAt.current = now;
     slidesRef.current = next; // keep fresh for the next commit in the same tick
     setSlides(next);
-    scheduleSave(next, title, nav, !!opts.quiet);
+    scheduleSave(next, titleRef.current, navRef.current, !!opts.quiet);
     syncHist();
   }
   function restoreSlides(target: string[]) {
@@ -426,7 +432,7 @@ export function App() {
     setSelEl(null);
     rendered.current = joinSlides(target);
     setViewKey((k) => k + 1); // reflect the restore on the canvas immediately
-    scheduleSave(target, title, nav, true); // persist (quiet — we already bumped)
+    scheduleSave(target, titleRef.current, navRef.current, true); // persist (quiet — we already bumped)
   }
   function undo() {
     if (!undoStack.current.length) return;
@@ -445,7 +451,7 @@ export function App() {
   redoRef.current = redo;
 
   function applyToSlide(i: number, fn: (c: string) => string) {
-    const next = slides.slice();
+    const next = slidesRef.current.slice(); // fresh — this runs from the once-bound canvas message handler too
     next[i] = fn(next[i] ?? "");
     commitSlides(next);
   }
