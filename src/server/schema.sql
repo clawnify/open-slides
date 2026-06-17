@@ -11,6 +11,9 @@ CREATE TABLE IF NOT EXISTS decks (
   nav TEXT NOT NULL DEFAULT '{"mode":"dots"}',
   -- which brand from the library this deck uses (NULL = the first/default brand)
   brand_id TEXT,
+  -- deck-level "agent.md": general, free-form instructions for this deck that the
+  -- AI follows on every generate (audience, tone, must-say points, do/don'ts).
+  instructions TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

@@ -57,6 +57,7 @@ interface GenInput {
   templates: SlideTemplate[];
   currentIndex?: number; // the slide the user is looking at
   deck: DeckSlide[]; // the deck's current slides (indexed) at the start of the turn
+  instructions?: string; // deck-level agent.md: general guidance to always follow
 }
 
 function listDeck(deck: DeckSlide[]): string {
@@ -225,12 +226,19 @@ export async function generate(env: AiEnv, input: GenInput, ops: DeckOps): Promi
     }),
   };
 
+  const deckInstructions = input.instructions?.trim()
+    ? `DECK INSTRUCTIONS (the deck's agent.md — general guidance to ALWAYS follow for this deck: audience, tone, must-say points, do/don'ts):
+${input.instructions.trim()}
+
+`
+    : "";
+
   await generateText({
     model: model(env),
     system: systemPrompt(input.tokens, input.templates),
     prompt: `The user is currently looking at slide ${input.currentIndex ?? 0}.
 
-CURRENT DECK (index, notes, then the slide HTML):
+${deckInstructions}CURRENT DECK (index, notes, then the slide HTML):
 ${listDeck(input.deck)}
 
 REQUEST:

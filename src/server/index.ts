@@ -30,9 +30,24 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>();
 
+// Columns added after an instance was first deployed. Apply them lazily (once
+// per isolate) so existing apps self-heal without a manual migration — the ALTER
+// throws "duplicate column" on DBs that already have it, which we ignore.
+let _schemaReady = false;
+async function ensureSchema(): Promise<void> {
+  if (_schemaReady) return;
+  _schemaReady = true;
+  try {
+    await run("ALTER TABLE decks ADD COLUMN instructions TEXT NOT NULL DEFAULT ''");
+  } catch {
+    /* column already exists */
+  }
+}
+
 app.use("/api/*", async (c, next) => {
   initDB(c.env);
   initUploads(c.env.UPLOADS);
+  await ensureSchema();
   await next();
 });
 
@@ -50,6 +65,7 @@ interface Deck {
   theme: string;
   nav: string;
   brand_id: string | null;
+  instructions: string; // deck-level agent.md (general guidance the AI follows)
   created_at: string;
   updated_at: string;
 }
@@ -88,11 +104,18 @@ app.get("/api/decks/:id", async (c) => {
 });
 
 app.post("/api/decks", async (c) => {
-  const b = await c.req.json<Partial<Deck>>();
+  const b = await c.req.json<Partial<Deck> & { seed_from_brand?: boolean }>();
   if (!b.title?.trim()) return c.json({ error: "title is required" }, 400);
+  // "Use for new slides" seeds the deck from the brand's own example slides so it
+  // starts on-brand with real layouts; falls back to whatever content was sent.
+  let content = b.content ?? "";
+  if (b.seed_from_brand && b.brand_id) {
+    const examples = extractExampleSlides(await brandMdFor(b.brand_id));
+    if (examples.length) content = examples.join("\n\n---\n\n");
+  }
   const res = await run(
-    "INSERT INTO decks (title, content, theme, brand_id, nav) VALUES (?, ?, ?, ?, ?)",
-    [b.title.trim(), b.content ?? "", b.theme ?? "black", b.brand_id ?? null, JSON.stringify(DEFAULT_NAV)],
+    "INSERT INTO decks (title, content, theme, brand_id, nav, instructions) VALUES (?, ?, ?, ?, ?, ?)",
+    [b.title.trim(), content, b.theme ?? "black", b.brand_id ?? null, JSON.stringify(DEFAULT_NAV), b.instructions ?? ""],
   );
   const row = await get<Deck>("SELECT * FROM decks WHERE rowid = ?", [res.lastInsertRowid]);
   return c.json(row, 201);
@@ -104,8 +127,8 @@ app.put("/api/decks/:id", async (c) => {
   if (!existing) return c.json({ error: "Not found" }, 404);
   const b = await c.req.json<Partial<Deck>>();
   await run(
-    `UPDATE decks SET title = ?, content = ?, theme = ?, nav = ?, brand_id = ?, updated_at = datetime('now') WHERE id = ?`,
-    [b.title ?? existing.title, b.content ?? existing.content, b.theme ?? existing.theme, b.nav ?? existing.nav, b.brand_id ?? existing.brand_id, id],
+    `UPDATE decks SET title = ?, content = ?, theme = ?, nav = ?, brand_id = ?, instructions = ?, updated_at = datetime('now') WHERE id = ?`,
+    [b.title ?? existing.title, b.content ?? existing.content, b.theme ?? existing.theme, b.nav ?? existing.nav, b.brand_id ?? existing.brand_id, b.instructions ?? existing.instructions, id],
   );
   const row = await get<Deck>("SELECT * FROM decks WHERE id = ?", [id]);
   scheduleSweep(c); // a media reference may have just been removed
@@ -225,6 +248,7 @@ app.post("/api/decks/:id/generate", async (c) => {
           templates: TEMPLATES,
           currentIndex: b.current_index ?? 0,
           deck: snapshot(),
+          instructions: deck.instructions || "",
         },
         ops,
       );

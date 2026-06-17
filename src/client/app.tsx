@@ -187,7 +187,7 @@ const ANIMS = [
   { v: "grow", l: "Grow" },
 ];
 
-interface Deck { id: string; title: string; content: string; nav: string; updated_at: string }
+interface Deck { id: string; title: string; content: string; nav: string; brand_id: string | null; instructions: string; updated_at: string }
 interface Asset { id: string; key: string; name: string; content_type: string }
 interface SlideTemplate { id: string; name: string; body: string }
 type NavMode = "dots" | "arrows" | "numbers" | "none";
@@ -253,6 +253,7 @@ export function App() {
   const [slides, setSlides] = useState<string[]>([]);
   const [sel, setSel] = useState(0);
   const [nav, setNav] = useState<Nav>({ ...DEFAULT_NAV });
+  const [instructions, setInstructions] = useState(""); // deck-level agent.md
 
   // brand library
   const [brands, setBrands] = useState<{ id: string; name: string; tokens: BrandTokens }[]>([]);
@@ -277,6 +278,7 @@ export function App() {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const brandTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rendered = useRef("");
+  const instructionsRef = useRef(""); // fresh value for the debounced save closure
 
   const selected = decks.find((d) => d.id === selectedId) ?? null;
   const content = joinSlides(slides);
@@ -348,6 +350,8 @@ export function App() {
     setSel(0);
     selRef.current = 0; // keep the canvasSrc memo from restoring the prior deck's slide
     setSelEl(null);
+    setBrandId(d.brand_id ?? null); // reflect the deck's actual brand in the inspector
+    setInstructions(d.instructions ?? ""); instructionsRef.current = d.instructions ?? "";
     setNav(parseNavMode(d.nav));
     rendered.current = d.content;
     setViewKey((k) => k + 1);
@@ -364,7 +368,7 @@ export function App() {
   }
   async function save(next = slides, t = title, n = nav, quiet = false) {
     if (!selectedId) return;
-    const body = { title: t, content: joinSlides(next), nav: JSON.stringify(n) };
+    const body = { title: t, content: joinSlides(next), nav: JSON.stringify(n), instructions: instructionsRef.current };
     setSaving(true);
     const up: Deck = await fetch(`/api/decks/${selectedId}`, {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -375,6 +379,11 @@ export function App() {
       rendered.current = body.content;
       if (!quiet) setViewKey((k) => k + 1);
     }
+  }
+  // Deck-level agent.md. Saves quietly (doesn't change the rendered slide).
+  function setDeckInstructions(v: string) {
+    setInstructions(v); instructionsRef.current = v;
+    scheduleSave(slides, title, nav, true);
   }
   function applyToSlide(i: number, fn: (c: string) => string) {
     const next = slides.slice();
@@ -473,11 +482,12 @@ export function App() {
     const rows = await loadDecks();
     if (id === selectedId) rows.length ? selectDeck(rows[0]) : (setSelectedId(null), setSlides([]));
   }
-  // Start a brand-new deck that uses the given brand.
+  // Start a brand-new deck that uses the given brand, seeded from the brand's own
+  // example slides (server falls back to the generic starter if it has none).
   async function newDeckWithBrand(id: string) {
     const created: Deck = await fetch("/api/decks", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: "Untitled deck", content: starterContent(), brand_id: id }),
+      body: JSON.stringify({ title: "Untitled deck", brand_id: id, seed_from_brand: true, content: starterContent() }),
     }).then((r) => r.json());
     setDecks((ds) => [created, ...ds]);
     selectDeck(created);
@@ -773,6 +783,14 @@ export function App() {
                 </select>
                 <button onClick={() => setPage("brands")} title="Brand library" className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-neutral-200 hover:bg-neutral-50"><Palette size={14} /></button>
               </div>
+            </div>
+
+            <div className="px-4 pb-4">
+              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">Agent instructions</div>
+              <textarea value={instructions} onChange={(e) => setDeckInstructions(e.target.value)}
+                placeholder="General guidance the AI always follows for this deck — audience, tone, must-say points, do/don'ts."
+                className="h-28 w-full resize-none rounded-md border border-neutral-200 p-2 text-[12px] leading-relaxed outline-none focus:border-neutral-400" />
+              <p className="mt-1.5 text-[11px] leading-snug text-neutral-400">This deck's <code>agent.md</code> — read by the AI on every generate. Never shown on slides.</p>
             </div>
 
             <div className="px-4 pb-4">
