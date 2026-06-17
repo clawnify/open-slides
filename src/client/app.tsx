@@ -220,9 +220,10 @@ interface SelEl { sid: number; tag: string; anim: string; text: string }
 // slide inherits the brand's alignment by default (overridable per slide).
 const designedSlide = (inner: string) =>
   `<!-- html -->\n<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:0 9%;box-sizing:border-box">\n${inner}\n</div>`;
-const BLANK_SLIDE = designedSlide(
-  `  <h2 style="font:700 var(--brand-subheading-size)/1.05 var(--r-heading-font);margin:0;color:var(--brand-heading)">New slide</h2>\n  <p style="font:400 var(--brand-body-size)/1.5 var(--r-main-font);color:var(--brand-text);margin-top:18px;max-width:80%">Click to edit, or use the prompt below.</p>`,
-);
+// A truly empty slide — just the brand canvas, no elements. Add content via the
+// Media button, the prompt, or the Code tab. (The wrapper keeps it a real,
+// persistable slide; a fully empty chunk would be dropped as whitespace.)
+const BLANK_SLIDE = designedSlide("");
 const FALLBACK_STARTER = designedSlide(
   `  <div class="kicker" style="font-size:24px">Your kicker</div>\n  <h1 style="font:700 var(--brand-heading-size)/1.02 var(--r-heading-font);margin:14px 0 0;color:var(--brand-heading)">Your presentation</h1>\n  <p style="font:400 var(--brand-body-size)/1.4 var(--r-main-font);color:var(--brand-muted);max-width:72%;margin-top:18px">A supporting subtitle that sets the scene in one clear line.</p>`,
 );

@@ -60,10 +60,13 @@ interface GenInput {
   instructions?: string; // deck-level agent.md: general guidance to always follow
 }
 
-function listDeck(deck: DeckSlide[]): string {
+function listDeck(deck: DeckSlide[], currentIndex?: number): string {
   if (!deck.length) return "(empty deck)";
   return deck
-    .map((s) => `[${s.index}] ${s.notes || "(no notes)"}\n${s.content}`)
+    .map((s) => {
+      const mark = s.index === currentIndex ? "  ← CURRENT SLIDE (the user is looking at THIS one)" : "";
+      return `[${s.index}]${mark}\n${s.notes || "(no notes)"}\n${s.content}`;
+    })
     .join("\n---\n");
 }
 
@@ -248,10 +251,10 @@ ${input.instructions.trim()}
   await generateText({
     model: model(env),
     system: systemPrompt(input.tokens, input.templates),
-    prompt: `The user is currently looking at slide ${input.currentIndex ?? 0}.
+    prompt: `The user is currently looking at slide ${input.currentIndex ?? 0} (marked "← CURRENT SLIDE" below). When the request says "this slide", "the slide", or doesn't name a specific slide, act on slide ${input.currentIndex ?? 0} and no other — even if another slide has similar or identical text.
 
 ${deckInstructions}CURRENT DECK (index, notes, then the slide HTML):
-${listDeck(input.deck)}
+${listDeck(input.deck, input.currentIndex)}
 
 REQUEST:
 ${input.prompt}`,
