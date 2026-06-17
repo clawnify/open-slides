@@ -181,7 +181,7 @@ a brand-themed SVG from a short text DSL (one per slide):
 
 \`\`\`html
 <div class="infographic" style="flex:1;min-height:0"><script type="text/x-infographic">
-infographic sequence-steps-simple
+infographic sequence-steps-badge-card
 data
   lists
     - label Discover

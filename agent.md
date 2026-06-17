@@ -50,7 +50,7 @@ font-size and only set one (using the matching variable) for a special element.
   DSL in a marked script — it renders to a brand-themed SVG at serve time:
   ```html
   <div class="infographic" style="flex:1;min-height:0"><script type="text/x-infographic">
-  infographic sequence-steps-simple
+  infographic sequence-steps-badge-card
   data
     title Our rollout
     lists
@@ -60,9 +60,11 @@ font-size and only set one (using the matching variable) for a special element.
         desc Ship the core
   </script></div>
   ```
-  Templates include `sequence-steps-simple`, `sequence-timeline-simple`,
-  `sequence-funnel-simple`, `sequence-pyramid-simple`, `list-grid-simple`,
-  `compare-swot`, `relation-circle-icon-badge`. One per slide; don't style it yourself.
+  Prefer the **card/badge/node** variants (real visual cards) over the bare
+  `…-simple` ones (which are TEXT-ONLY): `sequence-steps-badge-card`,
+  `list-grid-badge-card`, `list-grid-compact-card`, `list-grid-ribbon-card`,
+  `sequence-funnel-simple`, `sequence-pyramid-simple`, `compare-swot`,
+  `relation-circle-icon-badge`. One per slide; don't style it yourself.
 - **Animations:** `class="fragment fade-up"` makes an element animate in — these
   play only while presenting, never in the editor or the PDF. Effects: fade-up,
   fade-down, fade-left, fade-right, zoom-in, grow.

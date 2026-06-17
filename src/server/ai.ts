@@ -140,12 +140,17 @@ data
     - label <short label>
       desc <one concise line>
   </script></div>\`
-  Pick a <template-id> that fits the idea:
-  • sequence-steps-simple, list-row-simple-horizontal-arrow — a left-to-right process
-  • sequence-timeline-simple, sequence-roadmap-vertical-simple — a timeline / roadmap
-  • sequence-funnel-simple — a funnel;  sequence-pyramid-simple — a pyramid/hierarchy
-  • list-grid-simple, list-grid-progress-card — a grid of items (progress = needs a value)
-  • compare-swot — a 2x2 / SWOT comparison;  relation-circle-icon-badge — a cycle/relationship
+  Pick a <template-id> that fits the idea. IMPORTANT: prefer the card/badge/node
+  variants below — they render real visual cards. AVOID the bare "…-simple" list/
+  grid/steps templates: they are TEXT-ONLY (no cards or shapes) and look like plain
+  text, which is not what you want.
+  • Process / steps → sequence-steps-badge-card, sequence-snake-steps-compact-card
+  • Timeline / roadmap → sequence-timeline-rounded-rect-node, sequence-roadmap-vertical-badge-card
+  • Funnel → sequence-funnel-simple;  Pyramid / hierarchy → sequence-pyramid-simple (these are shaped)
+  • Grid of items → list-grid-badge-card, list-grid-compact-card, list-grid-ribbon-card,
+    or list-grid-progress-card (progress needs a numeric value per item)
+  • 2x2 / SWOT comparison → compare-swot
+  • Cycle / relationship → relation-circle-icon-badge, relation-network-icon-badge
   Rules: ONE infographic per slide; give its div a height (flex:1;min-height:0 in a flex
   column); keep 3-6 items with short labels; do NOT style it yourself — it inherits the
   brand colors. Use a chart (above) for quantitative series, an infographic for concepts.

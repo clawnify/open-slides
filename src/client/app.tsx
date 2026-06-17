@@ -229,13 +229,14 @@ const FALLBACK_STARTER = designedSlide(
 );
 // An infographic slide: the @antv/infographic DSL lives in a marked script and is
 // rendered to a brand-themed SVG at serve time. Edit the DSL in the Code tab or
-// ask the AI (e.g. "make this a funnel"). Templates: sequence-steps-simple,
-// sequence-timeline-simple, sequence-funnel-simple, sequence-pyramid-simple,
-// list-grid-simple, compare-swot, relation-circle-icon-badge.
+// ask the AI (e.g. "make this a funnel"). Use the card/badge/node variants for a
+// visual look — the bare "…-simple" templates are text-only. Good picks:
+// sequence-steps-badge-card, list-grid-badge-card, list-grid-compact-card,
+// sequence-funnel-simple, sequence-pyramid-simple, compare-swot.
 const INFOGRAPHIC_SLIDE = designedSlide(
   `  <h2 style="font:700 var(--brand-subheading-size)/1.05 var(--r-heading-font);margin:0;color:var(--brand-heading)">Our process</h2>
   <div class="infographic" style="flex:1;min-height:0;margin-top:18px"><script type="text/x-infographic">
-infographic sequence-steps-simple
+infographic sequence-steps-badge-card
 data
   lists
     - label Discover
