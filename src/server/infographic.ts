@@ -45,16 +45,21 @@ function decodeEntities(s: string): string {
     .replace(/&amp;/g, "&");
 }
 
-// Strip the XML prolog/stylesheet PI and make the SVG scale to its container
-// (drop fixed width/height, keep the viewBox).
+// Strip the XML prolog/stylesheet PI and make the SVG scale to its container:
+// drop fixed width/height, keep the viewBox, and size it to fill + center via the
+// `style` — MERGING into any existing style (antv sets style="background-color:…",
+// and a duplicate style attribute would be ignored, leaving the SVG unsized).
 function cleanSvg(raw: string): string {
   const i = raw.indexOf("<svg");
   if (i < 0) return "";
   let svg = raw.slice(i);
+  const sizeCss = "width:100%;height:100%;display:block";
   svg = svg.replace(/<svg\b([^>]*)>/, (_m, attrs: string) => {
     let a = attrs.replace(/\s(?:width|height)="[^"]*"/g, "");
+    if (/\sstyle="/.test(a)) a = a.replace(/\sstyle="([^"]*)"/, (_s, st) => ` style="${st};${sizeCss}"`);
+    else a += ` style="${sizeCss}"`;
     if (!/preserveAspectRatio=/.test(a)) a += ' preserveAspectRatio="xMidYMid meet"';
-    return `<svg${a} style="width:100%;height:100%;display:block">`;
+    return `<svg${a}>`;
   });
   return svg;
 }
