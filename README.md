@@ -26,6 +26,10 @@ visually (click any element) or in code.
   authored as a `DESIGN.md`, so slides are on-brand by construction.
 - **Present in the browser** — one click goes fullscreen with arrow-key
   navigation, speaker notes, and entrance animations. Nothing to install.
+- **Charts & infographics** — drop in a chart or an
+  [@antv/infographic](https://github.com/antvis/Infographic) (process, timeline,
+  funnel, pyramid, SWOT, …) written as a tiny text DSL; it renders to an on-brand
+  SVG at serve time, in the editor, present view and the PDF.
 - **Bring your own media** — upload logos and images and place them on a slide;
   unused media is cleaned up automatically.
 - **Export to PDF** — one click produces a clean, one-slide-per-page PDF you can

@@ -9,10 +9,11 @@ import {
   makeKey,
 } from "./uploads";
 import { revealDoc } from "./reveal";
-import { renderDeckPdf, PdfRenderError } from "./pdf";
+import { renderDeckPdf, renderSlidePng, PdfRenderError } from "./pdf";
 import { parseTokens, brandHead, brandLogoTag, brandGuideHtml, setTokensInMd, DEFAULT_BRAND_MD, type BrandTokens } from "./brand";
 import { TEMPLATES } from "./templates";
 import { generate, editBrand, hasAiKey, type DeckOps, type DeckSlide, type AuthoredSlide, type BrandOps, type BrandTokensPatch } from "./ai";
+import { bakeInfographics } from "./infographic";
 
 type Bindings = {
   DB: D1Database;
@@ -128,10 +129,12 @@ app.get("/api/decks/:id/view", async (c) => {
   const only = onlyRaw != null ? parseInt(onlyRaw, 10) : undefined;
   const thumb = c.req.query("thumb") === "1";
   const tokens = parseTokens(await brandMdFor(row.brand_id));
+  // Render any infographic DSL → brand-themed SVG before serving.
+  const baked = await bakeInfographics(row.content, { colorPrimary: tokens.colors.accent, colorBg: tokens.colors.bg });
   return c.html(
     revealDoc({
       mode: "view",
-      content: rewriteAssetsForView(row.content),
+      content: rewriteAssetsForView(baked),
       theme: row.theme,
       brandHeadHtml: brandHead(tokens),
       brandLogoHtml: thumb ? "" : brandLogoTag(resolveLogoForView(tokens.logo)),
@@ -195,6 +198,17 @@ app.post("/api/decks/:id/generate", async (c) => {
       if (index < 0 || index >= chunks.length) throw new Error(`no slide at index ${index} (deck has ${chunks.length})`);
       chunks.splice(index, 1);
       await persist(Math.max(0, index - 1));
+    },
+    renderPng: async (index) => {
+      if (!c.env.CLAWNIFY_TOKEN) return null; // no managed render off-platform
+      if (index < 0 || index >= chunks.length) return null;
+      try {
+        const html = await slidePrintHtml(chunks[index], deck.theme, parseTokens(designMd));
+        return arrayBufferToBase64(await renderSlidePng(c.env.CLAWNIFY_TOKEN, html));
+      } catch (e) {
+        console.error("view_slide render failed", e);
+        return null;
+      }
     },
   };
 
@@ -399,7 +413,8 @@ app.get("/api/decks/:id/pdf", async (c) => {
   // The headless renderer can't reach the app's authenticated /api/uploads
   // route, so inline any referenced media (and the logo) as data: URIs.
   const tokens = parseTokens(await brandMdFor(row.brand_id));
-  const content = await inlineAssets(row.content);
+  const baked = await bakeInfographics(row.content, { colorPrimary: tokens.colors.accent, colorBg: tokens.colors.bg });
+  const content = await inlineAssets(baked);
   const html = revealDoc({
     mode: "print",
     content,
@@ -421,6 +436,45 @@ app.get("/api/decks/:id/pdf", async (c) => {
   } catch (err) {
     const detail = err instanceof PdfRenderError ? err.detail || err.message : String(err);
     return c.json({ error: "pdf_render_failed", detail }, 502);
+  }
+});
+
+// Build the print HTML for ONE slide (infographics baked, media inlined, no page
+// chrome) — shared by the slide-PNG endpoint and the agent's view_slide tool.
+async function slidePrintHtml(slideChunk: string, theme: string, tokens: BrandTokens): Promise<string> {
+  let content = await bakeInfographics(slideChunk, { colorPrimary: tokens.colors.accent, colorBg: tokens.colors.bg });
+  content = await inlineAssets(content);
+  return revealDoc({
+    mode: "print",
+    content,
+    theme,
+    brandHeadHtml: brandHead(tokens),
+    brandLogoHtml: brandLogoTag(await resolveLogoForPrint(tokens.logo)),
+    nav: { mode: "none" },
+  });
+}
+
+// Render a single slide to a PNG so an agent can SEE how its HTML came out and
+// whether it rendered correctly. GET /api/decks/:id/slide/:n → image/png.
+app.get("/api/decks/:id/slide/:n", async (c) => {
+  const row = await get<Deck>("SELECT * FROM decks WHERE id = ?", [c.req.param("id")]);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  if (!c.env.CLAWNIFY_TOKEN) {
+    return c.json({ error: "Slide render not configured (missing CLAWNIFY_TOKEN). Runs on deployed apps." }, 503);
+  }
+  const n = parseInt(c.req.param("n"), 10);
+  const chunks = splitDeck(row.content);
+  if (!Number.isFinite(n) || n < 0 || n >= chunks.length) {
+    return c.json({ error: `No slide ${n} — deck has ${chunks.length} slide(s)` }, 404);
+  }
+  const tokens = parseTokens(await brandMdFor(row.brand_id));
+  try {
+    const html = await slidePrintHtml(chunks[n], row.theme, tokens);
+    const png = await renderSlidePng(c.env.CLAWNIFY_TOKEN, html);
+    return new Response(png, { headers: { "Content-Type": "image/png", "Cache-Control": "no-store" } });
+  } catch (err) {
+    const detail = err instanceof PdfRenderError ? err.detail || err.message : String(err);
+    return c.json({ error: "slide_render_failed", detail }, 502);
   }
 });
 

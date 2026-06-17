@@ -45,6 +45,24 @@ font-size and only set one (using the matching variable) for a special element.
   `data-background-image="assets/<key>"`), preferring the brand's own colours.
 - **Charts:** a `<div class="chart" data-chart='{"type":"bar|line|donut","labels":[…],"data":[…]}'></div>`
   renders as on-brand SVG automatically (give it a height). Don't style it yourself.
+- **Infographics:** for a process, timeline, funnel, pyramid, comparison, roadmap
+  or labelled grid, embed the [@antv/infographic](https://github.com/antvis/Infographic)
+  DSL in a marked script — it renders to a brand-themed SVG at serve time:
+  ```html
+  <div class="infographic" style="flex:1;min-height:0"><script type="text/x-infographic">
+  infographic sequence-steps-simple
+  data
+    title Our rollout
+    lists
+      - label Discover
+        desc Research and scope
+      - label Build
+        desc Ship the core
+  </script></div>
+  ```
+  Templates include `sequence-steps-simple`, `sequence-timeline-simple`,
+  `sequence-funnel-simple`, `sequence-pyramid-simple`, `list-grid-simple`,
+  `compare-swot`, `relation-circle-icon-badge`. One per slide; don't style it yourself.
 - **Animations:** `class="fragment fade-up"` makes an element animate in — these
   play only while presenting, never in the editor or the PDF. Effects: fade-up,
   fade-down, fade-left, fade-right, zoom-in, grow.
@@ -75,6 +93,7 @@ from storage, so don't upload media you aren't going to place on a slide.
 | DELETE | `/api/decks/{id}` | Delete |
 | GET  | `/api/decks/{id}/view` | Interactive reveal.js deck (HTML) |
 | GET  | `/api/decks/{id}/pdf` | Export to PDF (one slide per page) |
+| GET  | `/api/decks/{id}/slide/{n}` | Render slide `n` (0-based) to a **PNG** — fetch it to SEE how your HTML actually rendered and confirm it looks right |
 | GET  | `/api/brands` | List brands (id, name, tokens) |
 | POST | `/api/assets` | Upload an image/video (multipart `file`) → `{ key }` |
 
@@ -89,7 +108,11 @@ from storage, so don't upload media you aren't going to place on a slide.
    with `assets/<key>`. Upload only what you'll actually reference.
 3. Write the deck as HTML slides — one idea per slide, slides split by `---`,
    styled with the brand variables — and `POST /api/decks` (or `PUT` to revise).
-4. The user presents it in-app (fullscreen) or you can hand them
+4. **Verify rendering**: for any chart, infographic or dense slide, fetch
+   `GET /api/decks/{id}/slide/{n}` and look at the PNG — your HTML is rendered
+   exactly as the audience sees it, so you can catch overflow, overlap, an empty
+   chart or off-brand colors and fix the slide before handing it over.
+5. The user presents it in-app (fullscreen) or you can hand them
    `GET /api/decks/{id}/pdf` for a shareable PDF.
 
 ## How export works (so you can reason about failures)

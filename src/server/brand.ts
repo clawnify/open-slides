@@ -173,6 +173,22 @@ on-brand SVG (the accent for the series, muted for labels) — bar, line or donu
 One chart per slide, paired with a short headline that states the takeaway. Don't
 style the chart yourself — it picks up the brand colors automatically.
 
+For a concept rather than a data series — a process, timeline, funnel, pyramid,
+comparison or labelled grid — use an infographic instead of bullets. It renders to
+a brand-themed SVG from a short text DSL (one per slide):
+
+\`\`\`html
+<div class="infographic" style="flex:1;min-height:0"><script type="text/x-infographic">
+infographic sequence-steps-simple
+data
+  lists
+    - label Discover
+      desc Research and scope
+    - label Build
+      desc Ship the core
+</script></div>
+\`\`\`
+
 ## Do's and don'ts
 
 ### Do

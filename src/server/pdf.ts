@@ -47,3 +47,23 @@ export async function renderDeckPdf(token: string, html: string): Promise<ArrayB
   }
   return res.arrayBuffer();
 }
+
+// Render one slide's HTML to a PNG via the managed screenshot service. Used to
+// show a deck slide to an agent (in-app self-check + the REST preview endpoint)
+// so it can verify the slide rendered correctly. Same auth as the PDF service.
+export async function renderSlidePng(
+  token: string,
+  html: string,
+  size: { width: number; height: number } = { width: 1280, height: 720 },
+): Promise<ArrayBuffer> {
+  const res = await fetch("https://services.clawnify.com/screenshot/render", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ html, width: size.width, height: size.height, type: "png" }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new PdfRenderError(`Screenshot service responded ${res.status}`, res.status, detail.slice(0, 500));
+  }
+  return res.arrayBuffer();
+}

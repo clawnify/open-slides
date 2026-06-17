@@ -47,6 +47,7 @@ export interface DeckOps {
   add(slide: AuthoredSlide, afterIndex?: number): Promise<number>; // → new slide's index
   edit(index: number, slide: AuthoredSlide): Promise<void>;
   remove(index: number): Promise<void>;
+  renderPng(index: number): Promise<string | null>; // base64 PNG of the rendered slide, or null
 }
 
 interface GenInput {
@@ -75,7 +76,8 @@ function systemPrompt(tokens: BrandTokens, templates: SlideTemplate[]): string {
    - \`edit_slide\` — replace the slide at an index with new content (use this to refine/fix an existing slide).
    - \`delete_slide\` — remove the slide at an index.
    - \`read_deck\` — re-read the current slides with their indices and notes (indices shift after add/delete, so re-read if unsure).
-3. Stop when the deck satisfies the request.
+   - \`view_slide\` — render a slide to an IMAGE and look at it to check it came out right. After writing a chart, an infographic or a dense/complex slide, view it; if text overflows, elements overlap, a chart/infographic is empty, or it looks off-brand, fix it with edit_slide. Don't view every trivial slide — use it where rendering can surprise you.
+3. Stop when the deck satisfies the request and the slides you checked look right.
 
 Match the work to the request:
 - "edit/fix/refine this slide" → ONE edit_slide on the current slide.
@@ -109,6 +111,28 @@ Match the work to the request:
   brand's own bg/accent colors (from the tokens) over an arbitrary color. You may
   use data-background-image="assets/<name>" for a full-bleed image the user provided.
 - Charts: to show data, add \`<div class="chart" style="height:380px" data-chart='{"type":"bar","labels":["Q1","Q2"],"data":[12,19]}'></div>\` — type is bar | line | donut. It renders as on-brand SVG automatically; do NOT add your own colors or styling inside it. Give the chart div a height (or flex:1 with min-height:0 inside a flex column).
+- Infographics: for a PROCESS, TIMELINE, FUNNEL, PYRAMID, COMPARISON, ROADMAP or
+  a labelled GRID of items, use an infographic instead of plain bullets. Write its
+  declarative DSL inside a marked script; it renders to an on-brand SVG automatically:
+  \`<div class="infographic" style="flex:1;min-height:0;margin-top:18px"><script type="text/x-infographic">
+infographic <template-id>
+data
+  title <optional short title>
+  lists
+    - label <short label>
+      desc <one concise line>
+    - label <short label>
+      desc <one concise line>
+  </script></div>\`
+  Pick a <template-id> that fits the idea:
+  • sequence-steps-simple, list-row-simple-horizontal-arrow — a left-to-right process
+  • sequence-timeline-simple, sequence-roadmap-vertical-simple — a timeline / roadmap
+  • sequence-funnel-simple — a funnel;  sequence-pyramid-simple — a pyramid/hierarchy
+  • list-grid-simple, list-grid-progress-card — a grid of items (progress = needs a value)
+  • compare-swot — a 2x2 / SWOT comparison;  relation-circle-icon-badge — a cycle/relationship
+  Rules: ONE infographic per slide; give its div a height (flex:1;min-height:0 in a flex
+  column); keep 3-6 items with short labels; do NOT style it yourself — it inherits the
+  brand colors. Use a chart (above) for quantitative series, an infographic for concepts.
 - Entrance animations (optional): add \`class="fragment fade-up"\` to elements that should animate in on click. Effects: fade-up, fade-down, fade-left, fade-right, zoom-in, grow. They play only while presenting.
 - Only reference images the user explicitly provides as \`assets/<name>\`; otherwise omit images.
 
@@ -185,6 +209,19 @@ export async function generate(env: AiEnv, input: GenInput, ops: DeckOps): Promi
           return `error: ${e instanceof Error ? e.message : String(e)}`;
         }
       },
+    }),
+    view_slide: tool({
+      description: "Render the slide at `index` to an image and SEE it, exactly as it will look. Use this to verify a slide you just wrote actually rendered well — check for overflow/cut-off text, overlap, off-brand colors, an empty chart/infographic, or bad spacing — then fix it with edit_slide if needed. Worth doing for charts, infographics and dense layouts.",
+      inputSchema: z.object({ index: z.number().int().describe("0-based index of the slide to look at.") }),
+      execute: async ({ index }) => {
+        const png = await ops.renderPng(index);
+        return png ?? "PREVIEW_UNAVAILABLE";
+      },
+      // Hand the PNG to the model as an image it can actually look at.
+      toModelOutput: ({ output }) =>
+        typeof output === "string" && output !== "PREVIEW_UNAVAILABLE" && output.length > 100
+          ? { type: "content", value: [{ type: "media", data: output, mediaType: "image/png" }] }
+          : { type: "content", value: [{ type: "text", text: "Slide preview unavailable (rendering not configured here) — continue without it." }] },
     }),
   };
 

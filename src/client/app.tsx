@@ -224,6 +224,25 @@ const BLANK_SLIDE = designedSlide(
 const FALLBACK_STARTER = designedSlide(
   `  <div class="kicker" style="font-size:24px">Your kicker</div>\n  <h1 style="font:700 var(--brand-heading-size)/1.02 var(--r-heading-font);margin:14px 0 0;color:var(--brand-heading)">Your presentation</h1>\n  <p style="font:400 var(--brand-body-size)/1.4 var(--r-main-font);color:var(--brand-muted);max-width:72%;margin-top:18px">A supporting subtitle that sets the scene in one clear line.</p>`,
 );
+// An infographic slide: the @antv/infographic DSL lives in a marked script and is
+// rendered to a brand-themed SVG at serve time. Edit the DSL in the Code tab or
+// ask the AI (e.g. "make this a funnel"). Templates: sequence-steps-simple,
+// sequence-timeline-simple, sequence-funnel-simple, sequence-pyramid-simple,
+// list-grid-simple, compare-swot, relation-circle-icon-badge.
+const INFOGRAPHIC_SLIDE = designedSlide(
+  `  <h2 style="font:700 var(--brand-subheading-size)/1.05 var(--r-heading-font);margin:0;color:var(--brand-heading)">Our process</h2>
+  <div class="infographic" style="flex:1;min-height:0;margin-top:18px"><script type="text/x-infographic">
+infographic sequence-steps-simple
+data
+  lists
+    - label Discover
+      desc Research and scope
+    - label Build
+      desc Ship the core
+    - label Launch
+      desc Go to market
+</script></div>`,
+);
 
 export function App() {
   const [decks, setDecks] = useState<Deck[]>([]);
@@ -697,6 +716,7 @@ export function App() {
                   <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">Designed</div>
                   {templates.map((t) => (<button key={t.id} onClick={() => addSlide(t.body)} className="block w-full px-3 py-1.5 text-left text-xs hover:bg-neutral-100">{t.name}</button>))}
                   <div className="my-1 border-t border-neutral-100" />
+                  <button onClick={() => addSlide(INFOGRAPHIC_SLIDE)} className="block w-full px-3 py-1.5 text-left text-xs hover:bg-neutral-100">Infographic</button>
                   <button onClick={() => addSlide(BLANK_SLIDE)} className="block w-full px-3 py-1.5 text-left text-xs hover:bg-neutral-100">Blank slide</button>
                 </div>
               )}
