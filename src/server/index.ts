@@ -30,24 +30,9 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-// Columns added after an instance was first deployed. Apply them lazily (once
-// per isolate) so existing apps self-heal without a manual migration — the ALTER
-// throws "duplicate column" on DBs that already have it, which we ignore.
-let _schemaReady = false;
-async function ensureSchema(): Promise<void> {
-  if (_schemaReady) return;
-  _schemaReady = true;
-  try {
-    await run("ALTER TABLE decks ADD COLUMN instructions TEXT NOT NULL DEFAULT ''");
-  } catch {
-    /* column already exists */
-  }
-}
-
 app.use("/api/*", async (c, next) => {
   initDB(c.env);
   initUploads(c.env.UPLOADS);
-  await ensureSchema();
   await next();
 });
 
