@@ -194,7 +194,10 @@ app.post("/api/decks/:id/generate", async (c) => {
   const enc = new TextEncoder();
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
-  const send = (obj: unknown) => writer.write(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
+  // Best-effort: if the SSE client disconnects (tab closed, proxy timeout),
+  // write() rejects — swallow it so the agent loop keeps running and persisting;
+  // the deck/brand is the durable output, the stream is just a live view.
+  const send = (obj: unknown) => writer.write(enc.encode(`data: ${JSON.stringify(obj)}\n\n`)).catch(() => {});
 
   const persist = async (sel: number) => {
     const content = joinDeck(chunks);
@@ -404,7 +407,10 @@ app.post("/api/brands/:id/generate", async (c) => {
   const enc = new TextEncoder();
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
-  const send = (obj: unknown) => writer.write(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
+  // Best-effort: if the SSE client disconnects (tab closed, proxy timeout),
+  // write() rejects — swallow it so the agent loop keeps running and persisting;
+  // the deck/brand is the durable output, the stream is just a live view.
+  const send = (obj: unknown) => writer.write(enc.encode(`data: ${JSON.stringify(obj)}\n\n`)).catch(() => {});
 
   const persist = async () => {
     await run("UPDATE brands SET design_md = ?, updated_at = datetime('now') WHERE id = ?", [md, id]);
