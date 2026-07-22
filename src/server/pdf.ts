@@ -11,7 +11,11 @@ export class PdfRenderError extends Error {
   }
 }
 
-export async function renderDeckPdf(token: string, html: string): Promise<ArrayBuffer> {
+export async function renderDeckPdf(
+  token: string,
+  html: string,
+  page: { width: number; height: number } = { width: 1280, height: 720 },
+): Promise<ArrayBuffer> {
   const res = await fetch("https://services.clawnify.com/pdf/render", {
     method: "POST",
     headers: {
@@ -20,15 +24,14 @@ export async function renderDeckPdf(token: string, html: string): Promise<ArrayB
     },
     body: JSON.stringify({
       html,
-      // Render at exactly the slide size. reveal lays a slide out relative to the
-      // viewport, so a larger (default) viewport scales the 1280x720 canvas up
-      // and it overflows the page. Pinning the viewport to 1280x720 makes reveal
-      // render 1:1.
-      viewport: { width: 1280, height: 720 },
-      // reveal's print mode injects `@page { size: 1280px 720px; margin: 0 }`.
+      // Render at exactly the physical page size of the deck's format. The doc's
+      // layout is fixed px, but pinning the viewport keeps the renderer from
+      // introducing any scaling of its own.
+      viewport: { width: page.width, height: page.height },
+      // The print doc injects `@page { size: …; margin: 0 }` for its format.
       // prefer_css_page_size makes Browser Rendering honor that exact page size
-      // instead of defaulting to Letter portrait — without it every 1280x720
-      // slide lands in the top strip and the rest bleeds onto the next page.
+      // instead of defaulting to Letter portrait — without it every page block
+      // lands in the top strip and the rest bleeds onto the next page.
       // (Cloudflare's REST /pdf supports preferCSSPageSize/format, not pixel
       // width/height, so we drive the size from the document's own CSS.)
       prefer_css_page_size: true,

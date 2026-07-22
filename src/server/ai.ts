@@ -9,6 +9,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { BrandTokens } from "./brand";
 import type { SlideTemplate } from "./templates";
+import type { PageFormat } from "./formats";
 
 // Provider-agnostic via the Vercel AI SDK. Works with a direct Anthropic key
 // (BYOK) or OpenRouter (platform standard); Anthropic wins when both are set.
@@ -54,6 +55,7 @@ interface GenInput {
   prompt: string;
   tokens: BrandTokens;
   designMd: string; // the brand's full DESIGN.md (prose layout/voice guidance + tokens)
+  format: PageFormat; // the deck's page format (16:9 slides / A4 document pages)
   templates: SlideTemplate[];
   currentIndex?: number; // the slide the user is looking at
   deck: DeckSlide[]; // the deck's current slides (indexed) at the start of the turn
@@ -70,8 +72,25 @@ function listDeck(deck: DeckSlide[], currentIndex?: number): string {
     .join("\n---\n");
 }
 
-function systemPrompt(tokens: BrandTokens, templates: SlideTemplate[]): string {
-  return `You are a slide designer for "Open Slides", a reveal.js deck tool. You build and refine decks by calling small tools in a loop, and you ALWAYS match the brand.
+function systemPrompt(tokens: BrandTokens, templates: SlideTemplate[], format: PageFormat): string {
+  const cw = format.canvas.width;
+  const ch = format.canvas.height;
+  const isDoc = format.kind === "document";
+  const docMode = isDoc
+    ? `
+
+## DOCUMENT MODE — this deck is an A4 PORTRAIT DOCUMENT, not a presentation
+- Each "slide" is one A4 page (${cw}x${ch} canvas, exported as a true A4 PDF page).
+- Pages read TOP-DOWN: use flex-start (not vertical centering) and ~7% top/bottom
+  + ~9% side padding: \`<div style="position:absolute;inset:0;display:flex;flex-direction:column;padding:7% 9%;box-sizing:border-box">\`.
+- Documents carry real content: paragraphs, card-row sections, data tables. Denser
+  than a slide is fine — but a page is still a FIXED canvas: content that doesn't
+  fit is clipped, never flowed to the next page. Split long sections across pages
+  yourself, and view_slide any dense page to check nothing is cut off.
+- Typical structure: a cover page, content pages (sections/tables/prose), a back
+  cover with contact details. The brand logo overlays every page automatically.`
+    : "";
+  return `You are a ${isDoc ? "document designer" : "slide designer"} for "Open Slides", a reveal.js ${isDoc ? "deck tool being used in A4 document mode" : "deck tool"}. You build and refine ${isDoc ? "documents" : "decks"} by calling small tools in a loop, and you ALWAYS match the brand.${docMode}
 
 ## How you work (a multi-step loop)
 1. Call \`read_brand_design\` FIRST to study the brand's voice, layout, spacing and rules.
@@ -100,9 +119,9 @@ styles, notes — verbatim) and change ONLY what the user asked. Concretely:
 - Only the CURRENT slide changes. Do not edit any other slide for consistency.
 When unsure of the exact current markup, call read_deck and copy it verbatim before editing.
 
-## Each slide is designed HTML on a 1280x720 canvas
+## Each slide is designed HTML on a ${cw}x${ch} canvas
 - Wrap the slide's content in:
-  \`<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:0 9%;box-sizing:border-box"> ... </div>\`
+  \`<div style="position:absolute;inset:0;display:flex;flex-direction:column;${isDoc ? "padding:7% 9%" : "justify-content:center;padding:0 9%"};box-sizing:border-box"> ... </div>\`
 - ALIGNMENT: do NOT put text-align / align-items on the wrapper — the slide
   inherits the brand's alignment by default (a guideline, kept consistent across
   the deck). Override it on a single slide ONLY when the layout needs it — e.g.
@@ -116,7 +135,7 @@ When unsure of the exact current markup, call read_deck and copy it verbatim bef
   Plain \`<h1>\`, \`<h2>\`, \`<h3>\` and \`<p>\`/\`<li>\` already inherit the brand
   scale, so OMIT font-size on them. If you do set one, use the matching variable
   (\`var(--brand-heading-size)\`, \`var(--brand-subheading-size)\`,
-  \`var(--brand-body-size)\`) — the canvas is a fixed 1280x720, so never use vw/clamp.
+  \`var(--brand-body-size)\`) — the canvas is a fixed ${cw}x${ch}, so never use vw/clamp.
   Set an explicit px size only for a deliberately special element (a big stat, a small caption).
   Example title: \`<h1 style="font-weight:700;color:var(--brand-heading)">...</h1>\` (size inherited)
   Use \`class="kicker"\` for a small uppercase accent eyebrow.
@@ -255,7 +274,7 @@ ${input.instructions.trim()}
 
   await generateText({
     model: model(env),
-    system: systemPrompt(input.tokens, input.templates),
+    system: systemPrompt(input.tokens, input.templates, input.format),
     prompt: `The user is currently looking at slide ${input.currentIndex ?? 0} (marked "← CURRENT SLIDE" below). When the request says "this slide", "the slide", or doesn't name a specific slide, act on slide ${input.currentIndex ?? 0} and no other — even if another slide has similar or identical text.
 
 ${deckInstructions}CURRENT DECK (index, notes, then the slide HTML):

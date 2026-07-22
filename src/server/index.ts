@@ -1,5 +1,5 @@
-import { Hono } from "hono";
-import { initDB, query, get, run } from "./db";
+import { createApp } from "@clawnify/app";
+import { query, get, run } from "./db";
 import {
   initUploads,
   putUpload,
@@ -11,7 +11,8 @@ import {
 import { revealDoc } from "./reveal";
 import { renderDeckPdf, renderSlidePng, PdfRenderError } from "./pdf";
 import { parseTokens, brandHead, brandLogoTag, brandGuideHtml, extractExampleSlides, setTokensInMd, DEFAULT_BRAND_MD, type BrandTokens } from "./brand";
-import { TEMPLATES } from "./templates";
+import { TEMPLATES, templatesFor } from "./templates";
+import { FORMATS, DEFAULT_FORMAT_ID, safeFormat, type PageFormat } from "./formats";
 import { generate, editBrand, hasAiKey, type DeckOps, type DeckSlide, type AuthoredSlide, type BrandOps, type BrandTokensPatch } from "./ai";
 import { bakeInfographics } from "./infographic";
 
@@ -28,10 +29,17 @@ type Bindings = {
   ANTHROPIC_API_KEY?: string;
 };
 
-const app = new Hono<{ Bindings: Bindings }>();
+// createApp bakes in OpenAPIHono construction, the per-request initDB
+// middleware and /api/openapi.json + /llms.txt discovery. Uploads (R2) init is
+// app-specific, so that middleware stays ours.
+const app = createApp<{ Bindings: Bindings }>({
+  title: "Open Slides",
+  version: "1.0.0",
+  description:
+    "Agent-friendly slide decks and A4 documents: designed HTML pages styled by a shared brand, presented in the browser and exported to PDF.",
+});
 
 app.use("/api/*", async (c, next) => {
-  initDB(c.env);
   initUploads(c.env.UPLOADS);
   await next();
 });
@@ -50,6 +58,7 @@ interface Deck {
   theme: string;
   nav: string;
   brand_id: string | null;
+  format: string; // page format id ('16:9' | 'a4-portrait') — see formats.ts
   instructions: string; // deck-level agent.md (general guidance the AI follows)
   created_at: string;
   updated_at: string;
@@ -98,9 +107,10 @@ app.post("/api/decks", async (c) => {
     const examples = extractExampleSlides(await brandMdFor(b.brand_id));
     if (examples.length) content = examples.join("\n\n---\n\n");
   }
+  const format = b.format && FORMATS[b.format] ? b.format : DEFAULT_FORMAT_ID;
   const res = await run(
-    "INSERT INTO decks (title, content, theme, brand_id, nav, instructions) VALUES (?, ?, ?, ?, ?, ?)",
-    [b.title.trim(), content, b.theme ?? "black", b.brand_id ?? null, JSON.stringify(DEFAULT_NAV), b.instructions ?? ""],
+    "INSERT INTO decks (title, content, theme, brand_id, format, nav, instructions) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    [b.title.trim(), content, b.theme ?? "black", b.brand_id ?? null, format, JSON.stringify(DEFAULT_NAV), b.instructions ?? ""],
   );
   const row = await get<Deck>("SELECT * FROM decks WHERE rowid = ?", [res.lastInsertRowid]);
   return c.json(row, 201);
@@ -129,7 +139,7 @@ app.delete("/api/decks/:id", async (c) => {
 // Interactive reveal.js deck — loaded by the editor's preview iframe and
 // fullscreened for in-app presenting. ?h=&v= restores the current slide.
 app.get("/api/decks/:id/view", async (c) => {
-  const row = await get<Deck>("SELECT content, theme, nav, brand_id FROM decks WHERE id = ?", [c.req.param("id")]);
+  const row = await get<Deck>("SELECT content, theme, nav, brand_id, format FROM decks WHERE id = ?", [c.req.param("id")]);
   if (!row) return c.text("Not found", 404);
   const h = parseInt(c.req.query("h") || "0", 10) || 0;
   const v = parseInt(c.req.query("v") || "0", 10) || 0;
@@ -144,6 +154,7 @@ app.get("/api/decks/:id/view", async (c) => {
       mode: "view",
       content: rewriteAssetsForView(baked),
       theme: row.theme,
+      format: safeFormat(row.format),
       brandHeadHtml: brandHead(tokens),
       brandLogoHtml: thumb ? "" : brandLogoTag(resolveLogoForView(tokens.logo)),
       h,
@@ -175,6 +186,7 @@ app.post("/api/decks/:id/generate", async (c) => {
   }
 
   const designMd = await brandMdFor(deck.brand_id);
+  const format = safeFormat(deck.format);
   const chunks = splitDeck(deck.content);
   const snapshot = (): DeckSlide[] => chunks.map((ch, i) => ({ index: i, ...extractNotes(ch) }));
 
@@ -211,8 +223,8 @@ app.post("/api/decks/:id/generate", async (c) => {
       if (!c.env.CLAWNIFY_TOKEN) return null; // no managed render off-platform
       if (index < 0 || index >= chunks.length) return null;
       try {
-        const html = await slidePrintHtml(chunks[index], deck.theme, parseTokens(designMd));
-        return arrayBufferToBase64(await renderSlidePng(c.env.CLAWNIFY_TOKEN, html));
+        const html = await slidePrintHtml(chunks[index], deck.theme, parseTokens(designMd), format);
+        return arrayBufferToBase64(await renderSlidePng(c.env.CLAWNIFY_TOKEN, html, format.page));
       } catch (e) {
         console.error("view_slide render failed", e);
         return null;
@@ -230,7 +242,8 @@ app.post("/api/decks/:id/generate", async (c) => {
           prompt: b.prompt!.trim(),
           tokens: parseTokens(designMd),
           designMd,
-          templates: TEMPLATES,
+          format,
+          templates: templatesFor(format),
           currentIndex: b.current_index ?? 0,
           deck: snapshot(),
           instructions: deck.instructions || "",
@@ -290,7 +303,13 @@ app.get("/api/brands", async (c) => {
 app.get("/api/brands/:id", async (c) => {
   const row = await get<Brand>("SELECT * FROM brands WHERE id = ?", [c.req.param("id")]);
   if (!row) return c.json({ error: "Not found" }, 404);
-  return c.json({ id: row.id, name: row.name, design_md: row.design_md, tokens: parseTokens(row.design_md) });
+  // The brand's original source files (role='reference') — shown in the editor
+  // and readable by agents replicating/refining the brand.
+  const references = await query<Asset>(
+    "SELECT * FROM assets WHERE role = 'reference' AND brand_id = ? ORDER BY created_at ASC",
+    [row.id],
+  );
+  return c.json({ id: row.id, name: row.name, design_md: row.design_md, tokens: parseTokens(row.design_md), references });
 });
 
 app.post("/api/brands", async (c) => {
@@ -314,7 +333,13 @@ app.put("/api/brands/:id", async (c) => {
 });
 
 app.delete("/api/brands/:id", async (c) => {
-  await run("DELETE FROM brands WHERE id = ?", [c.req.param("id")]);
+  const id = c.req.param("id");
+  // Reference originals live exactly as long as their brand.
+  for (const a of await query<Asset>("SELECT * FROM assets WHERE role = 'reference' AND brand_id = ?", [id])) {
+    await deleteUpload(a.key);
+    await run("DELETE FROM assets WHERE id = ?", [a.id]);
+  }
+  await run("DELETE FROM brands WHERE id = ?", [id]);
   await ensureBrands(); // never leave the library empty
   scheduleSweep(c);
   return c.json({ ok: true });
@@ -412,7 +437,16 @@ app.get("/api/brands/:id/preview", async (c) => {
 });
 
 // Designed, on-brand slide templates the client inserts into a deck.
-app.get("/api/templates", (c) => c.json(TEMPLATES));
+// ?format=a4-portrait returns the document page set; default is the 16:9 set.
+app.get("/api/templates", (c) => {
+  const fmt = c.req.query("format");
+  return c.json(fmt ? templatesFor(safeFormat(fmt)) : TEMPLATES);
+});
+
+// The available page formats (id, label, canvas) — the client's new-deck menu
+// and the agent both read these instead of hardcoding sizes.
+app.get("/api/formats", (c) =>
+  c.json(Object.values(FORMATS).map((f) => ({ id: f.id, label: f.label, kind: f.kind, canvas: f.canvas }))));
 
 // Export the deck to PDF (one slide per page) via the managed PDF service.
 app.get("/api/decks/:id/pdf", async (c) => {
@@ -428,19 +462,21 @@ app.get("/api/decks/:id/pdf", async (c) => {
   // The headless renderer can't reach the app's authenticated /api/uploads
   // route, so inline any referenced media (and the logo) as data: URIs.
   const tokens = parseTokens(await brandMdFor(row.brand_id));
+  const format = safeFormat(row.format);
   const baked = await bakeInfographics(row.content, { colorPrimary: tokens.colors.accent, colorBg: tokens.colors.bg });
   const content = await inlineAssets(baked);
   const html = revealDoc({
     mode: "print",
     content,
     theme: row.theme,
+    format,
     brandHeadHtml: brandHead(tokens),
     brandLogoHtml: brandLogoTag(await resolveLogoForPrint(tokens.logo)),
     nav: parseNav(row.nav), // print uses only nav.slideNumber (arrows/progress are present-only)
   });
 
   try {
-    const pdf = await renderDeckPdf(c.env.CLAWNIFY_TOKEN, html);
+    const pdf = await renderDeckPdf(c.env.CLAWNIFY_TOKEN, html, format.page);
     const filename = `${makeKey(row.title)}.pdf`;
     return new Response(pdf, {
       headers: {
@@ -456,13 +492,14 @@ app.get("/api/decks/:id/pdf", async (c) => {
 
 // Build the print HTML for ONE slide (infographics baked, media inlined, no page
 // chrome) — shared by the slide-PNG endpoint and the agent's view_slide tool.
-async function slidePrintHtml(slideChunk: string, theme: string, tokens: BrandTokens): Promise<string> {
+async function slidePrintHtml(slideChunk: string, theme: string, tokens: BrandTokens, format: PageFormat): Promise<string> {
   let content = await bakeInfographics(slideChunk, { colorPrimary: tokens.colors.accent, colorBg: tokens.colors.bg });
   content = await inlineAssets(content);
   return revealDoc({
     mode: "print",
     content,
     theme,
+    format,
     brandHeadHtml: brandHead(tokens),
     brandLogoHtml: brandLogoTag(await resolveLogoForPrint(tokens.logo)),
     nav: { mode: "none" },
@@ -483,9 +520,10 @@ app.get("/api/decks/:id/slide/:n", async (c) => {
     return c.json({ error: `No slide ${n} — deck has ${chunks.length} slide(s)` }, 404);
   }
   const tokens = parseTokens(await brandMdFor(row.brand_id));
+  const format = safeFormat(row.format);
   try {
-    const html = await slidePrintHtml(chunks[n], row.theme, tokens);
-    const png = await renderSlidePng(c.env.CLAWNIFY_TOKEN, html);
+    const html = await slidePrintHtml(chunks[n], row.theme, tokens, format);
+    const png = await renderSlidePng(c.env.CLAWNIFY_TOKEN, html, format.page);
     return new Response(png, { headers: { "Content-Type": "image/png", "Cache-Control": "no-store" } });
   } catch (err) {
     const detail = err instanceof PdfRenderError ? err.detail || err.message : String(err);
@@ -493,10 +531,14 @@ app.get("/api/decks/:id/slide/:n", async (c) => {
   }
 });
 
-// ── Assets (media) ───────────────────────────────────────────────────
-// There is no media library: an asset exists only while a slide or a brand
-// logo references it (`assets/<key>`). Upload inserts a reference; removing the
-// last reference makes the asset an orphan, which the sweep deletes from R2.
+// ── Assets (media + brand reference originals) ───────────────────────
+// There is no media library: a `media` asset exists only while a slide or a
+// brand logo references it (`assets/<key>`). Upload inserts a reference;
+// removing the last reference makes the asset an orphan, which the sweep
+// deletes from R2. A `reference` asset is different: it's a brand's original
+// source file (e.g. the PDF a brand was replicated from) — kept as provenance
+// and as a fidelity oracle for later edits. References are never swept; they
+// live until their brand is deleted (or they're removed explicitly).
 
 interface Asset {
   id: string;
@@ -504,6 +546,8 @@ interface Asset {
   name: string;
   content_type: string;
   size: number;
+  role: string; // 'media' | 'reference'
+  brand_id: string | null; // for role='reference': the owning brand
   created_at: string;
 }
 
@@ -511,6 +555,16 @@ app.post("/api/assets", async (c) => {
   const body = await c.req.parseBody();
   const file = body["file"];
   if (!file || typeof file === "string") return c.json({ error: "No file provided" }, 400);
+
+  // Optional fields: role='reference' + brand_id store the file as a brand's
+  // original source document instead of GC-managed slide media.
+  const role = typeof body["role"] === "string" && body["role"] === "reference" ? "reference" : "media";
+  const brandId = typeof body["brand_id"] === "string" ? body["brand_id"] : "";
+  if (role === "reference") {
+    if (!brandId) return c.json({ error: "brand_id is required for reference uploads" }, 400);
+    const brand = await get<{ id: string }>("SELECT id FROM brands WHERE id = ?", [brandId]);
+    if (!brand) return c.json({ error: "Unknown brand_id" }, 400);
+  }
 
   let key = makeKey(file.name || "file");
   const clash = await get<{ id: string }>("SELECT id FROM assets WHERE key = ?", [key]);
@@ -525,11 +579,24 @@ app.post("/api/assets", async (c) => {
   await putUpload(key, data, contentType);
 
   const res = await run(
-    "INSERT INTO assets (key, name, content_type, size) VALUES (?, ?, ?, ?)",
-    [key, file.name || key, contentType, data.byteLength],
+    "INSERT INTO assets (key, name, content_type, size, role, brand_id) VALUES (?, ?, ?, ?, ?, ?)",
+    [key, file.name || key, contentType, data.byteLength, role, role === "reference" ? brandId : null],
   );
   const row = await get<Asset>("SELECT * FROM assets WHERE rowid = ?", [res.lastInsertRowid]);
   return c.json(row, 201);
+});
+
+// Remove a brand's reference original. Media assets are GC-managed (delete the
+// slide reference instead), so only role='reference' rows can be deleted here.
+app.delete("/api/assets/:id", async (c) => {
+  const row = await get<Asset>("SELECT * FROM assets WHERE id = ?", [c.req.param("id")]);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  if (row.role !== "reference") {
+    return c.json({ error: "Only reference assets can be deleted directly — media is removed by dropping its slide reference" }, 400);
+  }
+  await deleteUpload(row.key);
+  await run("DELETE FROM assets WHERE id = ?", [row.id]);
+  return c.json({ ok: true });
 });
 
 app.get("/api/uploads/:key", async (c) => {
@@ -585,12 +652,14 @@ function lower8(): string {
 
 const ASSET_REF_RE = /assets\/([A-Za-z0-9._-]+)/g;
 
-// Delete any asset no slide or brand logo references anymore (garbage-collect
-// media removed from the deck). A short grace period spares freshly-uploaded
-// assets whose reference hasn't been saved yet (the editor saves on a debounce).
+// Delete any media asset no slide or brand logo references anymore
+// (garbage-collect media removed from the deck). Reference originals
+// (role='reference') are exempt — they're kept until their brand is deleted.
+// A short grace period spares freshly-uploaded assets whose reference hasn't
+// been saved yet (the editor saves on a debounce).
 async function sweepOrphanAssets(): Promise<void> {
   const stale = await query<{ id: string; key: string }>(
-    "SELECT id, key FROM assets WHERE created_at < datetime('now', '-120 seconds')",
+    "SELECT id, key FROM assets WHERE role = 'media' AND created_at < datetime('now', '-120 seconds')",
   );
   if (stale.length === 0) return;
 

@@ -12,7 +12,9 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.84",
     "@antv/infographic": "^0.2.19",
-    "@clawnify/db": "^0.2.0",
+    "@clawnify/app": "^0.1.0",
+    "@clawnify/db": "^0.4.1",
+    "@hono/zod-openapi": "^1.5.1",
     "@openrouter/ai-sdk-provider": "^2.9.1",
     "ai": "^6.0.205",
     "hono": "^4.6.0",
