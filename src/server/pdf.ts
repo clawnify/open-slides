@@ -58,11 +58,23 @@ export async function renderSlidePng(
   token: string,
   html: string,
   size: { width: number; height: number } = { width: 1280, height: 720 },
+  // jpeg + quality shrinks the payload ~5x — used where the image feeds a model
+  // loop (many images per conversation) rather than a human download.
+  // waitForSelector: capture only once the page's own script appends this
+  // element (JS-heavy documents, e.g. pdf.js rasterizing a page to canvas).
+  opts: { type?: "png" | "jpeg"; quality?: number; waitForSelector?: string } = {},
 ): Promise<ArrayBuffer> {
   const res = await fetch("https://services.clawnify.com/screenshot/render", {
     method: "POST",
     headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ html, width: size.width, height: size.height, type: "png" }),
+    body: JSON.stringify({
+      html,
+      width: size.width,
+      height: size.height,
+      type: opts.type ?? "png",
+      ...(opts.quality !== undefined ? { quality: opts.quality } : {}),
+      ...(opts.waitForSelector ? { wait_for_selector: opts.waitForSelector } : {}),
+    }),
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");

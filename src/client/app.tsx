@@ -229,6 +229,12 @@ function parseNavMode(s: string | undefined): Nav {
 }
 interface SelEl { sid: number; tag: string; anim: string; text: string }
 
+// The canned instruction behind "New brand from PDF" — replicate the attached
+// original as this brand. The server attaches the reference file(s) to the
+// model; the system prompt's replication mode does the heavy lifting.
+const REPLICATE_INSTRUCTION =
+  "Replicate the attached original document as this brand. Extract its exact colors, fonts and type scale, name the brand after it, and recreate EACH of its distinctive page layouts as format-tagged example slides. Verify with view_examples and iterate until each rendered example matches the original page.";
+
 // A designed (HTML) slide wrapper using the brand CSS variables. Slides are
 // always HTML — markdown is not supported. No text-align / align-items: the
 // slide inherits the brand's alignment by default (overridable per slide).
@@ -279,6 +285,8 @@ export function App() {
   const [tokens, setTokens] = useState<BrandTokens | null>(null);
   const [page, setPage] = useState<"deck" | "brands">("deck");
   const [editorBrandId, setEditorBrandId] = useState<string | null>(null);
+  // A one-shot instruction the brand editor runs on open (PDF → brand import).
+  const [pendingAuto, setPendingAuto] = useState<{ brandId: string; instruction: string } | null>(null);
 
   const [selEl, setSelEl] = useState<SelEl | null>(null);
   const [bottomTab, setBottomTab] = useState<"prompt" | "code">("prompt");
@@ -749,6 +757,22 @@ export function App() {
     await loadBrands();
     setEditorBrandId(b.id);
   }
+  // One-click PDF → brand conversion: create a brand, attach the picked file as
+  // its reference original, open the editor and auto-run the replication
+  // instruction (the AI reads the file, extracts the design and recreates its
+  // page layouts as format-tagged example slides, verifying renders as it goes).
+  async function createBrandFromPdf() {
+    const b: { id: string } = await fetch("/api/brands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Imported template" }) }).then((r) => r.json());
+    const a = await pickAndUpload("application/pdf,image/*", { role: "reference", brand_id: b.id });
+    if (!a) {
+      await fetch(`/api/brands/${b.id}`, { method: "DELETE" }); // picker cancelled — don't leave an empty brand
+      await loadBrands();
+      return;
+    }
+    await loadBrands();
+    setPendingAuto({ brandId: b.id, instruction: REPLICATE_INSTRUCTION });
+    setEditorBrandId(b.id);
+  }
   function setFont(role: "heading" | "body", name: string) {
     const f = fontByName(name);
     patchBrand((t) => {
@@ -816,6 +840,8 @@ export function App() {
           <BrandEditor
             brandId={editorBrandId}
             active={editorBrandId === activeBrandId}
+            autoInstruction={pendingAuto?.brandId === editorBrandId ? pendingAuto.instruction : undefined}
+            onAutoConsumed={() => setPendingAuto(null)}
             onBack={() => setEditorBrandId(null)}
             onChanged={loadBrands}
             onUse={(f) => newDeckWithBrand(editorBrandId, f)}
@@ -829,7 +855,10 @@ export function App() {
                   <h1 className="text-xl font-semibold">Brand library</h1>
                   <p className="text-sm text-neutral-500">Design systems your decks can use. Click one to preview and edit.</p>
                 </div>
-                <button onClick={createBrand} className="flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-2 text-sm font-medium text-white hover:bg-neutral-700"><Plus size={15} /> New brand</button>
+                <div className="flex items-center gap-2">
+                  <button onClick={createBrandFromPdf} className="flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-100"><FileText size={15} /> New brand from PDF</button>
+                  <button onClick={createBrand} className="flex items-center gap-1.5 rounded-md bg-neutral-900 px-3 py-2 text-sm font-medium text-white hover:bg-neutral-700"><Plus size={15} /> New brand</button>
+                </div>
               </div>
               <div className="grid grid-cols-3 gap-4">
                 {brands.map((b) => (
@@ -1026,8 +1055,8 @@ function BrandCard({ brand, active, onUse, onEdit }: { brand: { id: string; name
 }
 
 // ── brand editor (preview + name + prompt + DESIGN.md) ──
-function BrandEditor({ brandId, active, onBack, onChanged, onUse, onDeleted }: {
-  brandId: string; active: boolean; onBack: () => void; onChanged: () => void; onUse: (format: string) => void; onDeleted: () => void;
+function BrandEditor({ brandId, active, autoInstruction, onAutoConsumed, onBack, onChanged, onUse, onDeleted }: {
+  brandId: string; active: boolean; autoInstruction?: string; onAutoConsumed?: () => void; onBack: () => void; onChanged: () => void; onUse: (format: string) => void; onDeleted: () => void;
 }) {
   const [name, setName] = useState("");
   const [md, setMd] = useState("");
@@ -1075,12 +1104,12 @@ function BrandEditor({ brandId, active, onBack, onChanged, onUse, onDeleted }: {
   // Multi-step agent loop, streamed: the agent adjusts tokens and edits the
   // guidelines through tool calls; each change streams back and updates the
   // preview live (same pattern as the slide editor).
-  async function applyPrompt() {
-    if (!instruction.trim() || busy) return;
+  async function runInstruction(text: string) {
+    if (!text.trim() || busy) return;
     setBusy(true);
     try {
       const res = await fetch(`/api/brands/${brandId}/generate`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instruction }),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instruction: text }),
       });
       if (!res.ok || !res.body) {
         const b: any = await res.json().catch(() => ({}));
@@ -1113,6 +1142,18 @@ function BrandEditor({ brandId, active, onBack, onChanged, onUse, onDeleted }: {
       alert(String(e instanceof Error ? e.message : e));
     } finally { setBusy(false); }
   }
+  const applyPrompt = () => runInstruction(instruction);
+  // PDF → brand import: auto-run the replication instruction once, as soon as
+  // the brand has loaded (the reference file was attached before we opened).
+  const autoRan = useRef(false);
+  useEffect(() => {
+    if (autoInstruction && tokens && !autoRan.current) {
+      autoRan.current = true;
+      onAutoConsumed?.();
+      runInstruction(autoInstruction);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoInstruction, tokens]);
   async function del() {
     if (!confirm("Delete this brand?")) return;
     await fetch(`/api/brands/${brandId}`, { method: "DELETE" });
