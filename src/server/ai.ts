@@ -323,6 +323,10 @@ export interface BrandOps {
   updateTokens(patch: BrandTokensPatch): Promise<void>; // merge + persist + stream
   editGuidelines(oldStr: string, newStr: string): Promise<void>; // surgical prose replace
   writeGuidelines(markdown: string): Promise<void>; // full prose rewrite, keep tokens
+  // Render the brand's CURRENT example slides for one format to PNGs (base64,
+  // capped), so the loop can SEE its output and compare it to the original.
+  // null = rendering unavailable (no managed token off-platform).
+  renderExamples(formatId: string): Promise<string[] | null>;
 }
 
 // A brand's original source file (a reference asset), attached to the model as
@@ -335,7 +339,14 @@ export interface BrandReference {
 
 export async function editBrand(
   env: AiEnv,
-  input: { instruction: string; currentMd: string; references?: BrandReference[] },
+  input: {
+    instruction: string;
+    currentMd: string;
+    references?: BrandReference[];
+    // Exact colors parsed from the original PDF's vector content — authoritative
+    // over anything read off the (possibly color-shifted) rasterized images.
+    paletteNote?: string;
+  },
   ops: BrandOps,
 ): Promise<void> {
   const system = `You edit a brand design system for "Open Slides" by calling small tools in a loop. A brand is a DESIGN.md: written guidelines (prose) plus a machine-readable token set that drives every slide's colors, fonts, sizes, logo and alignment.
@@ -357,7 +368,14 @@ Keep visuals and prose IN SYNC: when the instruction implies a visual change ("d
 - textAlign is "left" or "center" (applies deck-wide). radius is a CSS length ("14px").
 - Keep the guidelines a real design system (sections + voice), not just a token dump. Always keep an "Example slides" section with AT LEAST THREE concrete example slides (HTML using the brand variables) — they show the system in practice and ground slide generation.
 - Example slides may target a page format: a "### <name> (<format-id>)" sub-heading tags its examples — e.g. "### Cover (a4-portrait)" for A4 document pages (1240x1754 canvas, top-down, padding:7% 9%); untagged examples are 16:9 slides (1280x720, vertically centered). New decks seeded from the brand start from the examples matching their format, so when the brand replicates a DOCUMENT template, author its page layouts as (a4-portrait)-tagged examples.
-- If the brand's ORIGINAL source files are attached (images/PDF of the document this brand replicates), GROUND everything in them: extract the real colors, type roles, spacing and page structures from the original — do not invent a generic look — and recreate its distinctive page layouts as tagged example slides.`;
+
+## REPLICATION MODE — when original source files are attached
+If the brand's ORIGINAL files are attached (images/PDF of the document this brand replicates) and the instruction asks to create/replicate the brand from them, this is a REPLICATION, and the bar is "a page from this brand is mistakable for a page of the original":
+1. GROUND everything in the original: extract its real colors (sample the exact hexes you see), font roles (serif/sans display vs body), spacing and page structures. Do not invent a generic look.
+2. REPLACE the ENTIRE "## Example slides" section (write_guidelines) — never keep the default/generic examples. Author ONE example per distinctive page type of the original (cover, content/card page, data page, back cover…), tagged with the format matching the original's page shape (an A4 portrait document → "(a4-portrait)").
+3. SIZE CONVERSION — the #1 replication mistake. Token sizes and example px are in CANVAS px, and the A4 canvas (1240 wide) is larger than a real A4 page: 1pt in the original ≈ 2.1 canvas px (1px at 96dpi ≈ 1.56 canvas px). So a 10pt body → sizes.body ≈ 21; a 24pt title → ≈ 50. NEVER set sizes.body below 18 for a document brand — 12-14 renders unreadably small.
+4. MEASURE, don't eyeball, when authoring: the A4 canvas is 1240x1754 ≈ 210x297mm, so 1mm ≈ 5.9px and 1pt ≈ 2.1px. Read margins, band heights, gaps and type sizes off the original and convert.
+5. VERIFY WITH YOUR EYES — the loop that gets you to pixel-perfect: after writing the examples, call view_examples for the format and COMPARE each render against the attached original page by page — layout, proportions, type scale, colors, weights, spacing. Fix every visible mismatch (edit_guidelines / update_tokens) and view again. Repeat until a rendered example is mistakable for the original page. Do not stop while anything is visibly off.`;
 
   const tools = {
     read_brand: tool({
@@ -405,6 +423,42 @@ Keep visuals and prose IN SYNC: when the instruction implies a visual change ("d
         catch (e) { return `error: ${e instanceof Error ? e.message : String(e)}`; }
       },
     }),
+    view_examples: tool({
+      description: "Render the brand's CURRENT example slides for a page format to images and SEE them exactly as they'll look. Use after writing/editing examples to compare against the attached original and catch wrong scale, spacing, colors or layout — then fix and view again.",
+      inputSchema: z.object({
+        format: z.string().describe("Page format id of the examples to render: '16:9' or 'a4-portrait'."),
+      }),
+      execute: async ({ format }) => {
+        try {
+          const pngs = await ops.renderExamples(format);
+          if (pngs === null) return "PREVIEW_UNAVAILABLE";
+          if (!pngs.length) return `no example slides tagged (${format}) — nothing to render.`;
+          return JSON.stringify(pngs);
+        } catch (e) {
+          return `error: ${e instanceof Error ? e.message : String(e)}`;
+        }
+      },
+      // Hand the PNGs to the model as images it can actually look at.
+      toModelOutput: ({ output }) => {
+        if (typeof output !== "string") return { type: "content", value: [{ type: "text", text: String(output) }] };
+        if (output === "PREVIEW_UNAVAILABLE") {
+          return { type: "content", value: [{ type: "text", text: "Example rendering unavailable here — continue without it." }] };
+        }
+        try {
+          const pngs = JSON.parse(output) as string[];
+          if (Array.isArray(pngs) && pngs.length && typeof pngs[0] === "string" && pngs[0].length > 100) {
+            return {
+              type: "content",
+              value: pngs.map((p, i) => [
+                { type: "text" as const, text: `Example ${i + 1}:` },
+                { type: "media" as const, data: p, mediaType: "image/jpeg" },
+              ]).flat(),
+            };
+          }
+        } catch { /* not a PNG list — fall through to text */ }
+        return { type: "content", value: [{ type: "text", text: output }] };
+      },
+    }),
   };
 
   // Attach the brand's original source files so the model can SEE what it is
@@ -419,8 +473,11 @@ Keep visuals and prose IN SYNC: when the instruction implies a visual change ("d
     if (r.contentType.startsWith("image/")) parts.push({ type: "image", image: r.data, mediaType: r.contentType });
     else if (r.contentType === "application/pdf") parts.push({ type: "file", data: r.data, mediaType: r.contentType, filename: r.name });
   }
+  const paletteNote = input.paletteNote
+    ? `EXACT COLORS of the original, parsed from its PDF vector content (ranked by use — these are AUTHORITATIVE; the rasterized page images can color-shift gradients/photos, so when an image disagrees with this list, the list wins):\n${input.paletteNote}\n\n`
+    : "";
   const refNote = parts.length
-    ? `ATTACHED: ${parts.length} original source file(s) this brand replicates (${(input.references ?? []).map((r) => r.name).join(", ")}). Ground the design in them.\n\n`
+    ? `ATTACHED: ${parts.length} original source file(s)/page image(s) this brand replicates (${(input.references ?? []).map((r) => r.name).join(", ")}). Ground the design in them — use the images for LAYOUT, PROPORTION and TYPE SCALE; use the parsed color list (below, when present) for COLOR.\n\n${paletteNote}`
     : "";
   parts.push({ type: "text", text: `${refNote}CURRENT BRAND:\n${input.currentMd}\n\nINSTRUCTION:\n${input.instruction}` });
 
@@ -429,8 +486,10 @@ Keep visuals and prose IN SYNC: when the instruction implies a visual change ("d
     system,
     messages: [{ role: "user", content: parts }],
     tools,
-    stopWhen: stepCountIs(20),
-    maxOutputTokens: 6000,
+    // Replication runs a write → view → fix loop over several examples, so give
+    // it real room: enough steps to iterate and enough tokens for full-page HTML.
+    stopWhen: stepCountIs(48),
+    maxOutputTokens: 16000,
     temperature: 0.6,
   });
 }

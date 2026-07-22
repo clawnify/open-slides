@@ -335,8 +335,9 @@ app.put("/api/brands/:id", async (c) => {
 
 app.delete("/api/brands/:id", async (c) => {
   const id = c.req.param("id");
-  // Reference originals live exactly as long as their brand.
-  for (const a of await query<Asset>("SELECT * FROM assets WHERE role = 'reference' AND brand_id = ?", [id])) {
+  // Reference originals (and their derived page images) live exactly as long
+  // as their brand.
+  for (const a of await query<Asset>("SELECT * FROM assets WHERE role IN ('reference', 'reference-page') AND brand_id = ?", [id])) {
     await deleteUpload(a.key);
     await run("DELETE FROM assets WHERE id = ?", [a.id]);
   }
@@ -361,18 +362,43 @@ app.post("/api/brands/:id/generate", async (c) => {
 
   let md = existing.design_md || DEFAULT_BRAND_MD;
 
-  // The brand's original source files (role='reference') are attached to the
-  // model as images/PDF documents, so "based on the original file" instructions
-  // are grounded in the actual file, not a guess. Bounded like inlineAssets.
+  // The brand's original source files are attached to the model, so "based on
+  // the original file" instructions are grounded in the actual file, not a
+  // guess. For a PDF original, attach its derived PAGE IMAGES (small, and a
+  // PDF part + tool-result images in one conversation trips a provider bug);
+  // fall back to the PDF itself only if no pages were derived. Image originals
+  // attach directly. Bounded like inlineAssets.
   const refRows = await query<Asset>(
     "SELECT * FROM assets WHERE role = 'reference' AND brand_id = ? ORDER BY created_at ASC",
     [id],
   );
   const references: { name: string; contentType: string; data: string }[] = [];
+  const paletteLines: string[] = [];
   for (const r of refRows.slice(0, 4)) {
-    const obj = await getUploadBytes(r.key);
-    if (!obj || obj.data.byteLength > 8 * 1024 * 1024) continue;
-    references.push({ name: r.name, contentType: obj.contentType, data: arrayBufferToBase64(obj.data) });
+    if (references.length >= 10) break;
+    const pages = await query<Asset>(
+      "SELECT * FROM assets WHERE role = 'reference-page' AND key LIKE ? ORDER BY key ASC",
+      [`${r.key}.page-%`],
+    );
+    if (r.content_type === "application/pdf") {
+      // Exact vector colors from the file itself — authoritative over any raster.
+      try {
+        const obj = await getUploadBytes(r.key);
+        if (obj) {
+          const palette = await extractPdfPalette(obj.data);
+          if (palette.length) paletteLines.push(`${r.name}: ${palette.join(", ")}`);
+        }
+      } catch (e) {
+        console.error("pdf palette extraction failed", e);
+      }
+    }
+    const rows = pages.length ? pages : [r];
+    for (const p of rows) {
+      if (references.length >= 10) break;
+      const obj = await getUploadBytes(p.key);
+      if (!obj || obj.data.byteLength > 8 * 1024 * 1024) continue;
+      references.push({ name: p.name, contentType: obj.contentType, data: arrayBufferToBase64(obj.data) });
+    }
   }
 
   const enc = new TextEncoder();
@@ -416,11 +442,37 @@ app.post("/api/brands/:id/generate", async (c) => {
       md = setTokensInMd(markdown, parseTokens(md)); // new prose, keep current tokens
       await persist();
     },
+    // Render the brand's current example slides for one format so the agent can
+    // SEE its output and compare it against the attached original (the loop that
+    // gets replication to pixel-perfect).
+    renderExamples: async (formatId: string) => {
+      if (!c.env.CLAWNIFY_TOKEN) return null; // no managed render off-platform
+      const fmt = safeFormat(formatId);
+      const tokens = parseTokens(md);
+      const out: string[] = [];
+      // JPEG + a cap of 3: these images ride the model conversation alongside the
+      // attached original on EVERY step, so keep them light or the provider
+      // rejects the growing payload.
+      for (const ex of extractExampleSlides(md, fmt.id).slice(0, 3)) {
+        try {
+          const html = await slidePrintHtml(ex, "white", tokens, fmt);
+          out.push(arrayBufferToBase64(await renderSlidePng(c.env.CLAWNIFY_TOKEN, html, fmt.page, { type: "jpeg", quality: 60 })));
+        } catch (e) {
+          console.error("view_examples render failed", e);
+        }
+      }
+      return out;
+    },
   };
 
   const run$ = (async () => {
     try {
-      await editBrand(c.env, { instruction: instruction.trim(), currentMd: md, references }, ops);
+      await editBrand(c.env, {
+        instruction: instruction.trim(),
+        currentMd: md,
+        references,
+        paletteNote: paletteLines.length ? paletteLines.join("\n") : undefined,
+      }, ops);
       await send({ type: "done" });
     } catch (err) {
       await send({ type: "error", error: String(err instanceof Error ? err.message : err) });
@@ -567,6 +619,127 @@ interface Asset {
   created_at: string;
 }
 
+// ── PDF reference → page images ──────────────────────────────────────
+// A PDF original is rasterized to per-page JPEGs at upload time by PyMuPDF in
+// the managed exec sandbox (services.clawnify.com/exec) — MuPDF renders color
+// spaces faithfully where in-browser pdf.js shifts CMYK images/gradients (the
+// classic "pink JPEG" bug), and pixel-perfect replication lives or dies on
+// true colors. The page images — not the raw PDF — are what the brand AI gets
+// attached: they're ~50x smaller than the base64 PDF re-sent on every agent
+// step, and they sidestep a provider bug where a PDF part + tool-result images
+// in the same conversation is rejected. Stored as role='reference-page' rows
+// keyed `<parentKey>.page-N.jpg`, so parent deletion can find them; never swept.
+
+const RASTER_PY = `import fitz
+doc = fitz.open("doc.pdf")
+n = min(len(doc), 8)
+for i in range(n):
+    page = doc[i]
+    scale = 794 / page.rect.width
+    pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
+    pix.save(f"page-{i+1}.jpg", jpg_quality=80)
+print(n)
+`;
+
+// The colors ACTUALLY used by the original, parsed from the PDF's own vector
+// content streams (rg/RG = rgb fill/stroke, k/K = cmyk) — ground truth that no
+// rasterizer can shift. Streams are FlateDecoded via DecompressionStream.
+// Returns hexes ranked by use, e.g. ["#C8392B (23x)", "#1B2D5B (14x)"].
+async function extractPdfPalette(pdf: ArrayBuffer): Promise<string[]> {
+  const bytes = new Uint8Array(pdf);
+  // ASCII-only view for locating markers. NOTE: never round-trip stream BYTES
+  // through a TextDecoder — "latin1" is really windows-1252 and remaps
+  // 0x80–0x9F, corrupting compressed data. Slice the byte array directly.
+  const ascii = (u8: Uint8Array) => {
+    let s = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < u8.length; i += chunk) s += String.fromCharCode(...u8.subarray(i, i + chunk));
+    return s;
+  };
+  const whole = ascii(bytes);
+  const counts = new Map<string, number>();
+  const hex = (v: number) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, "0");
+  const add = (r: number, g: number, b: number) => {
+    const h = `#${hex(r)}${hex(g)}${hex(b)}`.toUpperCase();
+    counts.set(h, (counts.get(h) ?? 0) + 1);
+  };
+  const scan = (s: string) => {
+    for (const m of s.matchAll(/(\d*\.?\d+)\s+(\d*\.?\d+)\s+(\d*\.?\d+)\s+(?:rg|RG|scn?|SCN?)[\s\n]/g)) {
+      add(parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3]));
+    }
+    for (const m of s.matchAll(/(\d*\.?\d+)\s+(\d*\.?\d+)\s+(\d*\.?\d+)\s+(\d*\.?\d+)\s+(?:k|K)[\s\n]/g)) {
+      const [c2, m2, y2, k2] = [parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3]), parseFloat(m[4])];
+      add((1 - c2) * (1 - k2), (1 - m2) * (1 - k2), (1 - y2) * (1 - k2));
+    }
+  };
+  scan(whole); // uncompressed content
+  // FlateDecoded streams: inflate each and scan. Failures (image streams, other
+  // filters) are expected — skip them. DecompressionStream is strict: trim the
+  // trailing EOL before `endstream` or it throws "trailing junk". The negative
+  // lookbehind skips the `stream\n` inside `endstream\n`.
+  for (const m of whole.matchAll(/(?<!end)stream\r?\n/g)) {
+    const start = (m.index ?? 0) + m[0].length;
+    let end = whole.indexOf("endstream", start);
+    if (end < 0 || end - start > 2 * 1024 * 1024) continue;
+    while (end > start && (bytes[end - 1] === 0x0a || bytes[end - 1] === 0x0d || bytes[end - 1] === 0x20 || bytes[end - 1] === 0x09)) end--;
+    try {
+      const ds = new DecompressionStream("deflate");
+      const inflated = await new Response(new Blob([bytes.subarray(start, end)]).stream().pipeThrough(ds)).arrayBuffer();
+      scan(ascii(new Uint8Array(inflated)));
+    } catch {
+      /* not a flate text stream */
+    }
+  }
+  return [...counts.entries()]
+    .filter(([h]) => h !== "#FFFFFF" && h !== "#000000") // whites/blacks carry no brand signal
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 12)
+    .map(([h, n]) => `${h} (${n}x)`);
+}
+
+async function rasterizeReferencePdf(
+  token: string,
+  pdf: ArrayBuffer,
+  parentKey: string,
+  parentName: string,
+  brandId: string,
+): Promise<void> {
+  const res = await fetch("https://services.clawnify.com/exec/run", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      files: [
+        { path: "main.py", data_base64: btoa(RASTER_PY) },
+        { path: "doc.pdf", data_base64: arrayBufferToBase64(pdf) },
+      ],
+      entry: "main.py",
+      requirements: ["pymupdf"],
+      artifacts: Array.from({ length: 8 }, (_, i) => `page-${i + 1}.jpg`),
+      output: "url",
+    }),
+  });
+  if (!res.ok) throw new Error(`exec service responded ${res.status}: ${(await res.text().catch(() => "")).slice(0, 300)}`);
+  const out = (await res.json()) as {
+    success?: boolean;
+    stderr?: string;
+    artifacts?: Array<{ path: string; url: string }>;
+  };
+  if (!out.artifacts?.length) throw new Error(`rasterization produced no pages: ${(out.stderr || "").slice(0, 300)}`);
+  for (const a of out.artifacts) {
+    const n = parseInt(a.path.match(/page-(\d+)\.jpg/)?.[1] ?? "0", 10);
+    if (!n) continue;
+    const img = await fetch(a.url);
+    if (!img.ok) continue;
+    const bytes = await img.arrayBuffer();
+    const key = `${parentKey}.page-${n}.jpg`;
+    await putUpload(key, bytes, "image/jpeg");
+    await run(
+      "INSERT INTO assets (key, name, content_type, size, role, brand_id) VALUES (?, ?, ?, ?, 'reference-page', ?)",
+      [key, `${parentName} — page ${n}`, "image/jpeg", bytes.byteLength, brandId],
+    );
+  }
+}
+
 app.post("/api/assets", async (c) => {
   const body = await c.req.parseBody();
   const file = body["file"];
@@ -599,6 +772,16 @@ app.post("/api/assets", async (c) => {
     [key, file.name || key, contentType, data.byteLength, role, role === "reference" ? brandId : null],
   );
   const row = await get<Asset>("SELECT * FROM assets WHERE rowid = ?", [res.lastInsertRowid]);
+
+  // PDF originals: derive per-page images now (synchronously — a brand generate
+  // may start right after this upload and needs the pages). Non-fatal on error.
+  if (role === "reference" && contentType === "application/pdf" && c.env.CLAWNIFY_TOKEN && data.byteLength <= 15 * 1024 * 1024) {
+    try {
+      await rasterizeReferencePdf(c.env.CLAWNIFY_TOKEN, data, key, file.name || key, brandId);
+    } catch (e) {
+      console.error("reference pdf rasterization failed", e);
+    }
+  }
   return c.json(row, 201);
 });
 
@@ -609,6 +792,11 @@ app.delete("/api/assets/:id", async (c) => {
   if (!row) return c.json({ error: "Not found" }, 404);
   if (row.role !== "reference") {
     return c.json({ error: "Only reference assets can be deleted directly — media is removed by dropping its slide reference" }, 400);
+  }
+  // A PDF original takes its derived page images with it.
+  for (const p of await query<Asset>("SELECT * FROM assets WHERE role = 'reference-page' AND key LIKE ?", [`${row.key}.page-%`])) {
+    await deleteUpload(p.key);
+    await run("DELETE FROM assets WHERE id = ?", [p.id]);
   }
   await deleteUpload(row.key);
   await run("DELETE FROM assets WHERE id = ?", [row.id]);
