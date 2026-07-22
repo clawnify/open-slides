@@ -11,6 +11,9 @@ CREATE TABLE IF NOT EXISTS decks (
   nav TEXT NOT NULL DEFAULT '{"mode":"dots"}',
   -- which brand from the library this deck uses (NULL = the first/default brand)
   brand_id TEXT,
+  -- page format: '16:9' (presentation) or 'a4-portrait' (A4 document). Drives
+  -- the design canvas size, the editor aspect ratio and the PDF page size.
+  format TEXT NOT NULL DEFAULT '16:9',
   -- deck-level "agent.md": general, free-form instructions for this deck that the
   -- AI follows on every generate (audience, tone, must-say points, do/don'ts).
   instructions TEXT NOT NULL DEFAULT '',
@@ -31,13 +34,20 @@ CREATE TABLE IF NOT EXISTS brands (
 
 -- Media: images/video uploaded into a slide and brand logos. Stored in R2 under
 -- `key`; referenced from deck content / brand DESIGN.md as `assets/<key>` (e.g.
--- ![](assets/logo.png)). There is no library — an asset lives only while it's
--- referenced; the server garbage-collects orphans when the last reference goes.
+-- ![](assets/logo.png)). There is no library — a `media` asset lives only while
+-- it's referenced; the server garbage-collects orphans when the last reference
+-- goes. `reference` assets are a brand's original source files (the PDF/images a
+-- brand was replicated from) — provenance + a fidelity oracle for later edits.
+-- They are never swept; they live until their brand is deleted.
 CREATE TABLE IF NOT EXISTS assets (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
   key TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
   content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
   size INTEGER NOT NULL DEFAULT 0,
+  -- 'media' (GC'd when unreferenced) or 'reference' (kept while its brand lives)
+  role TEXT NOT NULL DEFAULT 'media',
+  -- for role='reference': the brand this original belongs to
+  brand_id TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

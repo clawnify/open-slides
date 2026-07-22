@@ -15,6 +15,8 @@
 
 const REVEAL = "https://cdn.jsdelivr.net/npm/reveal.js@5.1.0";
 
+import { printScale, type PageFormat } from "./formats";
+
 // Deterministic, dependency-free SVG charts. A slide includes a chart with:
 //   <div class="chart" style="height:..." data-chart='{"type":"bar","labels":[...],"data":[...]}'></div>
 // This script computes & draws an on-brand SVG (bar / line / donut) into it,
@@ -102,6 +104,7 @@ interface DocOpts {
   mode: "view" | "print";
   content: string;
   theme: string;
+  format: PageFormat; // canvas + physical page size (16:9 deck / A4 document)
   brandHeadHtml: string;
   brandLogoHtml: string;
   h?: number;
@@ -116,13 +119,17 @@ interface DocOpts {
   nav?: { mode: "dots" | "arrows" | "numbers" | "none" };
 }
 
-// Deterministic PDF document: every slide is a fixed 1280x720 page block, content
-// at 1:1, paginated purely by CSS. We deliberately do NOT use reveal's print-pdf
-// mode — its layout scales to the render viewport and re-lays-out at page.pdf()
-// time, which makes Cloudflare's renderer overflow the page and surface stray
-// speaker-notes. Here there is no scaling: slides are authored at 1280x720 and
-// printed as-is. preferCSSPageSize + the @page rule give exact 16:9 pages.
+// Deterministic PDF document: every slide is a fixed canvas-sized block inside a
+// physical-page-sized wrapper, paginated purely by CSS. We deliberately do NOT
+// use reveal's print-pdf mode — its layout scales to the render viewport and
+// re-lays-out at page.pdf() time, which makes Cloudflare's renderer overflow the
+// page and surface stray speaker-notes. Here layout is fixed: slides are
+// authored at the format's canvas size and (for formats whose physical page
+// differs, e.g. A4) shrunk onto the page with one transform. preferCSSPageSize +
+// the @page rule give exact pages.
 function buildPrintDoc(opts: DocOpts): string {
+  const f = opts.format;
+  const scale = printScale(f);
   const showNum = opts.nav?.mode === "numbers";
   const chunks = splitSlides(opts.content);
   const total = chunks.length;
@@ -143,18 +150,20 @@ function buildPrintDoc(opts: DocOpts): string {
           if (img) bg += `background-image:url("${clean(img[1])}");background-size:cover;background-position:center;`;
         }
         const num = showNum ? `<div class="pdf-num">${i + 1} / ${total}</div>` : "";
-        return `<div class="pdf-slide" style="${bg}">\n${rest}\n${num}\n</div>`;
+        return `<div class="pdf-page"><div class="pdf-slide" style="${bg}">\n${rest}\n${num}\n</div></div>`;
       })
-      .join("\n") || `<div class="pdf-slide"></div>`;
+      .join("\n") || `<div class="pdf-page"><div class="pdf-slide"></div></div>`;
 
   return `<!doctype html><html><head><meta charset="utf-8" />
 <link rel="stylesheet" href="${REVEAL}/plugin/highlight/monokai.css" />
 <style>
-  @page { size: 1280px 720px; margin: 0; }
+  @page { size: ${f.pageSizeCss}; margin: 0; }
   html,body{ margin:0; padding:0; }
   body{ background: var(--brand-bg, #fff); color: var(--r-main-color, #111); font-family: var(--r-main-font, -apple-system, sans-serif); }
-  /* One fixed-size page per slide; content (often position:absolute;inset:0) fills it. */
-  .pdf-slide{ position: relative; width: 1280px; height: 720px; overflow: hidden; box-sizing: border-box; background: var(--brand-bg, #fff); break-after: page; page-break-after: always; }
+  /* One physical page per slide; the canvas-sized slide box is scaled onto it. */
+  .pdf-page{ position: relative; width: ${f.page.width}px; height: ${f.page.height}px; overflow: hidden; background: var(--brand-bg, #fff); break-after: page; page-break-after: always; }
+  /* Content (often position:absolute;inset:0) fills the authoring canvas. */
+  .pdf-slide{ position: relative; width: ${f.canvas.width}px; height: ${f.canvas.height}px; overflow: hidden; box-sizing: border-box; background: var(--brand-bg, #fff);${scale !== 1 ? ` transform: scale(${scale}); transform-origin: top left;` : ""} }
   /* Brand defaults (a guideline, not forced): alignment + type scale. Inline
      per-slide styles win, so a slide can deviate. */
   .pdf-slide > div{ text-align: var(--brand-align, left); align-items: var(--brand-justify, flex-start); }
@@ -164,7 +173,7 @@ function buildPrintDoc(opts: DocOpts): string {
   .pdf-slide :is(p, li, blockquote, td, th, figcaption){ font-size: var(--brand-body-size); }
   .pdf-slide .infographic{ flex: 0 1 auto !important; min-height: 0; }
   .pdf-slide .infographic svg{ font-family: var(--r-main-font); }
-  .pdf-slide:last-child{ break-after: auto; page-break-after: avoid; }
+  .pdf-page:last-child{ break-after: auto; page-break-after: avoid; }
   .pdf-num{ position: absolute; bottom: 22px; right: 28px; font: 500 18px/1 var(--r-main-font); color: var(--brand-muted, #999); }
   /* Speaker notes are presenter-only; never print them (reveal hides them in the
      editor/view, but this doc doesn't load reveal core CSS). */
@@ -192,11 +201,12 @@ export function revealDoc(opts: DocOpts): string {
   const theme = safeTheme(opts.theme);
   const sections = buildSections(opts.content, opts.only);
 
-  // Fixed 16:9 design canvas. center:false — designed slides position their own
-  // content (absolute / flex) inside the canvas, so reveal must not re-center.
-  // fragments:false so animated elements are always visible in the editor and
-  // thumbnails; the view harness turns fragments on only while presenting.
-  const SIZING = "width: 1280, height: 720, margin: 0, center: false,";
+  // Fixed design canvas (the deck format's size). center:false — designed slides
+  // position their own content (absolute / flex) inside the canvas, so reveal
+  // must not re-center. fragments:false so animated elements are always visible
+  // in the editor and thumbnails; the view harness turns fragments on only while
+  // presenting.
+  const SIZING = `width: ${opts.format.canvas.width}, height: ${opts.format.canvas.height}, margin: 0, center: false,`;
 
   const harness =
     opts.thumb

@@ -60,7 +60,7 @@ charts, never on large fills.
 - Display font for headlines at the hero size; body font for support at the body size.
 - One focal point per slide. Prefer a designed slide over a wall of bullets.
 - A small uppercase accent kicker opens most content slides.
-- Generous whitespace; ~9% side padding on the 1280×720 canvas.
+- Generous whitespace; ~9% side padding on the slide canvas.
 
 ## Colors
 
@@ -102,8 +102,11 @@ to 100px. Plain h1/h2/p inherit them, so you rarely set a size by hand.
 ## Layout
 
 ### Canvas
-Every slide is a fixed 1280×720 (16:9) canvas. Designed slides position content
-absolutely inside it; reveal scales the whole canvas to any screen.
+Every slide is a fixed canvas whose size comes from the deck's format — 1280×720
+for 16:9 presentations, 1240×1754 for A4 document pages. Designed slides position
+content absolutely inside it; reveal scales the whole canvas to any screen. One
+brand styles both formats: the same type scale and padding read the same because
+the canvases share the same width.
 
 ### Composition
 - Left-aligned, vertically centered, ~9% side padding.
@@ -132,7 +135,7 @@ scale. Full-bleed images and color-block backgrounds do the heavy lifting.
 - **Full-bleed image** — a photo background with a short caption bottom-left.
 
 ## Example slides
-Three slides that show the system in practice. Each fills the 1280×720 canvas,
+Three slides that show the system in practice. Each fills the slide canvas,
 styles with the brand variables, and omits alignment so it inherits the brand's
 default (override per slide only when a layout needs it).
 

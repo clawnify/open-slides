@@ -1,18 +1,37 @@
 # Open Slides — agent guide
 
-This app turns **designed HTML slides into reveal.js decks**. You author each
-slide as a small block of HTML that fills a 1280×720 canvas and is styled with
-the active brand's CSS variables, the user drops in logos/images, presents
-fullscreen in the browser, and exports to PDF on the managed Clawnify render
-service. You never touch a browser or a PDF toolchain — you write HTML and call
-this app's API. **Markdown is not supported.**
+This app turns **designed HTML slides into reveal.js decks — and A4 documents**.
+You author each slide as a small block of HTML that fills a fixed canvas and is
+styled with the active brand's CSS variables, the user drops in logos/images,
+presents fullscreen in the browser, and exports to PDF on the managed Clawnify
+render service. You never touch a browser or a PDF toolchain — you write HTML
+and call this app's API. **Markdown is not supported.**
 
 Base URL: this app's own origin. All endpoints are under `/api`.
+
+## Page formats
+
+Every deck has a `format`, set at creation (`POST /api/decks { format }`) and
+fixed for its lifetime (`GET /api/formats` lists them):
+
+| `format` | Canvas | Exports as | Use for |
+|---|---|---|---|
+| `16:9` (default) | 1280×720 | one 16:9 page per slide | presentations |
+| `a4-portrait` | 1240×1754 | true A4 pages (210×297mm) | documents: info memos, one-pagers, branded reports |
+
+Both share the same brand variables and ~same canvas width, so one brand's type
+scale reads the same in both. **A4 pages read top-down**: use
+`padding:7% 9%` and `flex-start` (not vertical centering), denser layouts are
+fine (paragraphs, card-row sections, data tables) — but a page is still a fixed
+canvas: content that doesn't fit is **clipped, never flowed** to the next page.
+Split long sections across pages yourself and verify dense pages with the
+slide-PNG endpoint.
 
 ## Deck format
 
 A deck is one document. Slides are separated by a line containing only `---`.
-Every slide is HTML laid out on a full 1280×720 canvas. Style with the brand CSS
+Every slide is HTML laid out on the full canvas of the deck's format
+(1280×720 for `16:9`, 1240×1754 for `a4-portrait`). Style with the brand CSS
 variables (never hardcode brand colors/fonts) so the deck stays on-brand:
 `--brand-bg`, `--brand-text`, `--brand-heading`, `--brand-accent`,
 `--brand-muted`, `--brand-heading-size`, `--brand-subheading-size`,
@@ -84,20 +103,37 @@ There is no media library to list: an asset exists only while a slide (or a
 brand logo) references it. Remove the reference and the file is garbage-collected
 from storage, so don't upload media you aren't going to place on a slide.
 
+## Brand reference originals
+
+When you replicate an existing template (a client's PDF, a branded document),
+store the original with the brand as **provenance + a fidelity oracle**:
+`POST /api/assets` with multipart fields `file`, `role=reference`,
+`brand_id=<id>`. Reference assets are never garbage-collected — they live until
+their brand is deleted (or `DELETE /api/assets/{id}`). `GET /api/brands/{id}`
+returns them under `references`; fetch one at `/api/uploads/{key}`.
+
+Replication loop: study the original → author the brand's DESIGN.md (tokens +
+guidelines + example pages) → build the deck/document → compare each rendered
+page (`GET /api/decks/{id}/slide/{n}`) against the original's pages and iterate.
+
 ## API
 
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET  | `/api/decks` | List decks |
-| GET  | `/api/decks/{id}` | Get one (includes `content`) |
-| POST | `/api/decks` | Create `{ title, content?, theme?, brand_id? }` |
-| PUT  | `/api/decks/{id}` | Update any of `title/content/theme/brand_id` |
+| GET  | `/api/decks/{id}` | Get one (includes `content`, `format`) |
+| POST | `/api/decks` | Create `{ title, content?, theme?, brand_id?, format? }` |
+| PUT  | `/api/decks/{id}` | Update any of `title/content/theme/brand_id` (not `format`) |
 | DELETE | `/api/decks/{id}` | Delete |
 | GET  | `/api/decks/{id}/view` | Interactive reveal.js deck (HTML) |
-| GET  | `/api/decks/{id}/pdf` | Export to PDF (one slide per page) |
+| GET  | `/api/decks/{id}/pdf` | Export to PDF (one slide/page per PDF page) |
 | GET  | `/api/decks/{id}/slide/{n}` | Render slide `n` (0-based) to a **PNG** — fetch it to SEE how your HTML actually rendered and confirm it looks right |
+| GET  | `/api/formats` | List page formats (id, label, kind, canvas) |
+| GET  | `/api/templates?format={id}` | Designed starter slides/pages for a format |
 | GET  | `/api/brands` | List brands (id, name, tokens) |
-| POST | `/api/assets` | Upload an image/video (multipart `file`) → `{ key }` |
+| GET  | `/api/brands/{id}` | One brand incl. `design_md` + `references` (original files) |
+| POST | `/api/assets` | Upload an image/video (multipart `file`) → `{ key }`; add `role=reference&brand_id=…` to store a brand original instead |
+| DELETE | `/api/assets/{id}` | Remove a brand reference original (media is GC-managed) |
 
 `theme` is a reveal.js theme name (the base under the brand's token overrides):
 `white`, `black`, `league`, `beige`, `sky`, `night`, `serif`, `simple`,

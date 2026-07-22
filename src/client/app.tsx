@@ -19,11 +19,15 @@ import {
   ImagePlus,
   Undo2,
   Redo2,
+  FileText,
+  Paperclip,
+  ExternalLink,
 } from "lucide-react";
 
 // Open a file picker and upload the chosen file as an asset. Resolves to the
-// stored asset (or null if cancelled).
-function pickAndUpload(accept: string): Promise<Asset | null> {
+// stored asset (or null if cancelled). `extra` adds form fields (e.g.
+// role=reference + brand_id for a brand's original source files).
+function pickAndUpload(accept: string, extra?: Record<string, string>): Promise<Asset | null> {
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
@@ -33,11 +37,21 @@ function pickAndUpload(accept: string): Promise<Asset | null> {
       if (!f) return resolve(null);
       const fd = new FormData();
       fd.append("file", f);
+      for (const [k, v] of Object.entries(extra ?? {})) fd.append(k, v);
       resolve(await fetch("/api/assets", { method: "POST", body: fd }).then((r) => r.json()));
     };
     input.click();
   });
 }
+
+// ── page formats (mirrors the server's formats.ts) ───────────────────
+// The format drives the canvas aspect ratio in the editor and the wording
+// (slides vs pages). Sizes live server-side; the client only needs the ratio.
+const CLIENT_FORMATS: Record<string, { w: number; h: number; kind: "deck" | "document" }> = {
+  "16:9": { w: 1280, h: 720, kind: "deck" },
+  "a4-portrait": { w: 1240, h: 1754, kind: "document" },
+};
+const formatOf = (id: string | null | undefined) => CLIENT_FORMATS[id ?? ""] ?? CLIENT_FORMATS["16:9"];
 
 // ── deck content <-> slides ──────────────────────────────────────────
 function splitSlides(content: string): string[] {
@@ -189,8 +203,8 @@ const ANIMS = [
   { v: "grow", l: "Grow" },
 ];
 
-interface Deck { id: string; title: string; content: string; nav: string; brand_id: string | null; instructions: string; updated_at: string }
-interface Asset { id: string; key: string; name: string; content_type: string }
+interface Deck { id: string; title: string; content: string; nav: string; brand_id: string | null; format: string; instructions: string; updated_at: string }
+interface Asset { id: string; key: string; name: string; content_type: string; role?: string; brand_id?: string | null }
 interface SlideTemplate { id: string; name: string; body: string }
 type NavMode = "dots" | "arrows" | "numbers" | "none";
 interface Nav { mode: NavMode }
@@ -297,6 +311,9 @@ export function App() {
 
   const selected = decks.find((d) => d.id === selectedId) ?? null;
   const content = joinSlides(slides);
+  const deckFormatId = selected?.format ?? "16:9";
+  const deckFormat = formatOf(deckFormatId);
+  const pageWord = deckFormat.kind === "document" ? "page" : "slide";
 
   // ── loading ──
   const loadDecks = useCallback(async () => {
@@ -314,9 +331,17 @@ export function App() {
   useEffect(() => {
     loadBrands();
     loadDecks().then((rows) => rows.length && selectDeck(rows[0]));
-    fetch("/api/templates").then((r) => r.json() as Promise<SlideTemplate[]>).then(setTemplates);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The "Add slide" template set follows the deck's format (16:9 slides vs A4
+  // document pages).
+  useEffect(() => {
+    fetch(`/api/templates?format=${encodeURIComponent(deckFormatId)}`)
+      .then((r) => r.json() as Promise<SlideTemplate[]>)
+      .then(setTemplates)
+      .catch(() => {});
+  }, [deckFormatId]);
 
   // The Design inspector edits the deck's active brand.
   const activeBrandId = brandId ?? brands[0]?.id ?? null;
@@ -527,19 +552,26 @@ export function App() {
     setSel(Math.max(0, Math.min(i, next.length - 1))); setSlidesAndSave(next);
   }
 
-  // New decks start from designed slides (Title + Title-and-bullets), or a single
-  // fallback slide if the templates haven't loaded yet.
-  function starterContent() {
-    const pick = (id: string) => templates.find((t) => t.id === id)?.body;
-    const bodies = [pick("title"), pick("bullets")].filter(Boolean) as string[];
+  // New decks start from designed starters for their format (Title + bullets for
+  // 16:9, Cover + Card sections for A4 documents), or a single fallback slide.
+  // Fetched per format — the loaded `templates` state tracks the CURRENT deck's
+  // format, which may differ from the one being created.
+  async function starterContent(format: string) {
+    const tpls = await fetch(`/api/templates?format=${encodeURIComponent(format)}`)
+      .then((r) => r.json() as Promise<SlideTemplate[]>)
+      .catch(() => [] as SlideTemplate[]);
+    const pick = (id: string) => tpls.find((t) => t.id === id)?.body;
+    const ids = formatOf(format).kind === "document" ? ["doc-cover", "doc-sections"] : ["title", "bullets"];
+    const bodies = ids.map(pick).filter(Boolean) as string[];
     return bodies.length ? bodies.join("\n\n---\n\n") : FALLBACK_STARTER;
   }
 
   // ── decks ──
-  async function newDeck() {
+  async function newDeck(format = "16:9") {
+    const isDoc = formatOf(format).kind === "document";
     const created: Deck = await fetch("/api/decks", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: "Untitled deck", content: starterContent() }),
+      body: JSON.stringify({ title: isDoc ? "Untitled document" : "Untitled deck", content: await starterContent(format), format }),
     }).then((r) => r.json());
     setDecks((ds) => [created, ...ds]); selectDeck(created);
   }
@@ -553,7 +585,7 @@ export function App() {
   async function newDeckWithBrand(id: string) {
     const created: Deck = await fetch("/api/decks", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: "Untitled deck", brand_id: id, seed_from_brand: true, content: starterContent() }),
+      body: JSON.stringify({ title: "Untitled deck", brand_id: id, seed_from_brand: true, content: await starterContent("16:9") }),
     }).then((r) => r.json());
     setDecks((ds) => [created, ...ds]);
     selectDeck(created);
@@ -740,7 +772,8 @@ export function App() {
           </button>
           {decksOpen && (
             <div className="absolute left-0 z-30 mt-1 w-60 overflow-hidden rounded-md border border-neutral-200 bg-white py-1 shadow-lg">
-              <button onClick={newDeck} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-600 hover:bg-neutral-100"><Plus size={14} /> New deck</button>
+              <button onClick={() => newDeck()} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-600 hover:bg-neutral-100"><Plus size={14} /> New deck</button>
+              <button onClick={() => newDeck("a4-portrait")} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-600 hover:bg-neutral-100"><FileText size={14} /> New document (A4)</button>
               <div className="my-1 border-t border-neutral-100" />
               {decks.map((d) => (
                 <div key={d.id} className={`group flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-neutral-50 ${d.id === selectedId ? "font-medium" : ""}`}>
@@ -764,7 +797,7 @@ export function App() {
               className="grid h-8 w-8 place-items-center rounded-md text-neutral-600 hover:bg-neutral-100 disabled:opacity-30 disabled:hover:bg-transparent"><Redo2 size={15} /></button>
           </div>
         )}
-        <span className="mr-1 text-xs text-neutral-400">{saving ? "Saving…" : selected ? `${slides.length} slides` : ""}</span>
+        <span className="mr-1 text-xs text-neutral-400">{saving ? "Saving…" : selected ? `${slides.length} ${pageWord}${slides.length === 1 ? "" : "s"}` : ""}</span>
         <button onClick={() => setPage(page === "brands" ? "deck" : "brands")} className={`flex h-8 items-center gap-1.5 rounded-md border px-3 text-sm ${page === "brands" ? "border-neutral-900 bg-neutral-900 text-white" : "border-neutral-200 hover:bg-neutral-50"}`}>
           <Palette size={14} /> Brands
         </button>
@@ -812,7 +845,7 @@ export function App() {
             <div className="flex-1 space-y-2 overflow-y-auto px-3 pb-2">
               {slides.map((s, i) => (
                 <div key={i} className="group relative">
-                  <button onClick={() => gotoSlide(i)} style={{ aspectRatio: "16 / 9" }}
+                  <button onClick={() => gotoSlide(i)} style={{ aspectRatio: `${deckFormat.w} / ${deckFormat.h}` }}
                     className={`block w-full overflow-hidden rounded-md border bg-neutral-900 text-left ${i === sel ? "border-neutral-900 ring-2 ring-neutral-900" : "border-neutral-200 hover:border-neutral-400"}`}>
                     <iframe key={viewKey} src={`/api/decks/${selected.id}/view?only=${i}&thumb=1&t=${viewKey}`} title={`Slide ${i + 1}`} tabIndex={-1} scrolling="no" className="pointer-events-none h-full w-full border-0" />
                   </button>
@@ -842,11 +875,11 @@ export function App() {
 
           {/* canvas + prompt/code */}
           <main className="flex min-w-0 flex-1 flex-col bg-neutral-100">
-            {/* Always present the canvas as the largest 16:9 box that fits the
-                available space (container-query units), so it never stretches with
-                the window — only the letterbox around it grows. */}
+            {/* Always present the canvas as the largest format-shaped box that
+                fits the available space (container-query units), so it never
+                stretches with the window — only the letterbox around it grows. */}
             <div className="flex min-h-0 flex-1 items-center justify-center p-3" style={{ containerType: "size" }}>
-              <div style={{ width: "min(100cqw, calc(100cqh * 16 / 9))", aspectRatio: "16 / 9" }}>
+              <div style={{ width: `min(100cqw, calc(100cqh * ${deckFormat.w} / ${deckFormat.h}))`, aspectRatio: `${deckFormat.w} / ${deckFormat.h}` }}>
                 <iframe key={viewKey} ref={canvasRef} src={canvasSrc} title="Canvas" allowFullScreen className="h-full w-full rounded-lg border border-neutral-200 bg-white shadow-sm" />
               </div>
             </div>
@@ -949,7 +982,10 @@ export function App() {
         <main className="grid flex-1 place-items-center text-neutral-400">
           <div className="text-center">
             <Presentation size={32} className="mx-auto mb-3 opacity-40" />
-            <button onClick={newDeck} className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700">Create your first deck</button>
+            <div className="flex items-center justify-center gap-2">
+              <button onClick={() => newDeck()} className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700">Create your first deck</button>
+              <button onClick={() => newDeck("a4-portrait")} className="rounded-md border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100">New A4 document</button>
+            </div>
           </div>
         </main>
       )}
@@ -993,14 +1029,29 @@ function BrandEditor({ brandId, active, onBack, onChanged, onUse, onDeleted }: {
   const [name, setName] = useState("");
   const [md, setMd] = useState("");
   const [tokens, setTokens] = useState<BrandTokens | null>(null);
+  const [references, setReferences] = useState<Asset[]>([]); // the brand's original source files
   const [instruction, setInstruction] = useState("");
   const [busy, setBusy] = useState(false);
   const [pk, setPk] = useState(0);
   const tmr = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    fetch(`/api/brands/${brandId}`).then((r) => r.json()).then((b: any) => { setName(b.name); setMd(b.design_md); setTokens(b.tokens); });
+    fetch(`/api/brands/${brandId}`).then((r) => r.json()).then((b: any) => { setName(b.name); setMd(b.design_md); setTokens(b.tokens); setReferences(b.references ?? []); });
   }, [brandId]);
+
+  // ── original source files (role='reference' assets, kept with the brand) ──
+  async function reloadReferences() {
+    const b: any = await fetch(`/api/brands/${brandId}`).then((r) => r.json());
+    setReferences(b.references ?? []);
+  }
+  async function addReference() {
+    const a = await pickAndUpload("application/pdf,image/*", { role: "reference", brand_id: brandId });
+    if (a) reloadReferences();
+  }
+  async function removeReference(id: string) {
+    await fetch(`/api/assets/${id}`, { method: "DELETE" });
+    reloadReferences();
+  }
 
   async function put(body: any) {
     const b: any = await fetch(`/api/brands/${brandId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
@@ -1123,6 +1174,20 @@ function BrandEditor({ brandId, active, onBack, onChanged, onUse, onDeleted }: {
                     valueToLabel={(v) => LOGO_POSITIONS.find((p) => p.v === v)?.l ?? "Bottom right"} />
                 )}
                 <p className="text-[11px] leading-snug text-neutral-400">Shown in the chosen corner of every slide and in the exported PDF.</p>
+              </Group>
+              <Group label="Original files">
+                {references.map((r) => (
+                  <div key={r.id} className="flex items-center gap-2 text-sm text-neutral-600">
+                    <FileText size={13} className="shrink-0 text-neutral-400" />
+                    <span className="flex-1 truncate" title={r.name}>{r.name}</span>
+                    <a href={`/api/uploads/${r.key}`} target="_blank" rel="noreferrer" title="Open" className="text-neutral-400 hover:text-neutral-900"><ExternalLink size={13} /></a>
+                    <button onClick={() => removeReference(r.id)} title="Remove" className="text-neutral-400 hover:text-red-500"><Trash2 size={13} /></button>
+                  </div>
+                ))}
+                <button onClick={addReference} className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-neutral-300 py-2 text-xs text-neutral-600 hover:bg-neutral-50">
+                  <Paperclip size={13} /> Attach original
+                </button>
+                <p className="text-[11px] leading-snug text-neutral-400">The source files this brand replicates — e.g. the original PDF template. Kept with the brand (never garbage-collected) so the AI can compare pages against them when refining.</p>
               </Group>
               <div>
                 <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">Refine by prompt</div>
