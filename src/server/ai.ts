@@ -107,6 +107,12 @@ Match the work to the request:
 - "add a slide about…" → add_slide(s) after the current slide.
 - "make a deck about…" / "start over" → turn the current slides INTO the new deck: edit the existing slides in place and add/delete as needed (don't leave leftover placeholder slides).
 
+## Brand example slides are format-tagged
+In the brand's "## Example slides", a sub-heading may tag its examples with a
+page format — e.g. "### Cover (a4-portrait)"; untagged examples are 16:9. This
+deck's format is ${format.id}: follow ONLY the examples matching it and ignore
+the rest — they are shaped for a different canvas.
+
 ## SURGICAL EDITS — the most important rule for edit_slide
 edit_slide REPLACES the whole slide, so you must rebuild it. Reproduce the
 existing slide's content and markup EXACTLY (same headline, subheading, body,
@@ -319,9 +325,17 @@ export interface BrandOps {
   writeGuidelines(markdown: string): Promise<void>; // full prose rewrite, keep tokens
 }
 
+// A brand's original source file (a reference asset), attached to the model as
+// an image or a PDF document so brand edits are grounded in the real original.
+export interface BrandReference {
+  name: string;
+  contentType: string;
+  data: string; // base64
+}
+
 export async function editBrand(
   env: AiEnv,
-  input: { instruction: string; currentMd: string },
+  input: { instruction: string; currentMd: string; references?: BrandReference[] },
   ops: BrandOps,
 ): Promise<void> {
   const system = `You edit a brand design system for "Open Slides" by calling small tools in a loop. A brand is a DESIGN.md: written guidelines (prose) plus a machine-readable token set that drives every slide's colors, fonts, sizes, logo and alignment.
@@ -341,7 +355,9 @@ Keep visuals and prose IN SYNC: when the instruction implies a visual change ("d
 - fonts.heading/body/mono are family names. For a Google font, set the family AND add its spec to fonts.google (e.g. "Playfair+Display:wght@500;700"); for a system font use a stack like "Georgia, serif" and drop it from google.
 - sizes.heading / sizes.subheading / sizes.body are px numbers from 12 to 100 (h1, h2 and body text scale).
 - textAlign is "left" or "center" (applies deck-wide). radius is a CSS length ("14px").
-- Keep the guidelines a real design system (sections + voice), not just a token dump. Always keep an "Example slides" section with AT LEAST THREE concrete example slides (HTML using the brand variables) — they show the system in practice and ground slide generation.`;
+- Keep the guidelines a real design system (sections + voice), not just a token dump. Always keep an "Example slides" section with AT LEAST THREE concrete example slides (HTML using the brand variables) — they show the system in practice and ground slide generation.
+- Example slides may target a page format: a "### <name> (<format-id>)" sub-heading tags its examples — e.g. "### Cover (a4-portrait)" for A4 document pages (1240x1754 canvas, top-down, padding:7% 9%); untagged examples are 16:9 slides (1280x720, vertically centered). New decks seeded from the brand start from the examples matching their format, so when the brand replicates a DOCUMENT template, author its page layouts as (a4-portrait)-tagged examples.
+- If the brand's ORIGINAL source files are attached (images/PDF of the document this brand replicates), GROUND everything in them: extract the real colors, type roles, spacing and page structures from the original — do not invent a generic look — and recreate its distinctive page layouts as tagged example slides.`;
 
   const tools = {
     read_brand: tool({
@@ -391,10 +407,27 @@ Keep visuals and prose IN SYNC: when the instruction implies a visual change ("d
     }),
   };
 
+  // Attach the brand's original source files so the model can SEE what it is
+  // replicating: images as vision parts, PDFs as document parts (Claude ingests
+  // both natively).
+  const parts: Array<
+    | { type: "text"; text: string }
+    | { type: "image"; image: string; mediaType?: string }
+    | { type: "file"; data: string; mediaType: string; filename?: string }
+  > = [];
+  for (const r of input.references ?? []) {
+    if (r.contentType.startsWith("image/")) parts.push({ type: "image", image: r.data, mediaType: r.contentType });
+    else if (r.contentType === "application/pdf") parts.push({ type: "file", data: r.data, mediaType: r.contentType, filename: r.name });
+  }
+  const refNote = parts.length
+    ? `ATTACHED: ${parts.length} original source file(s) this brand replicates (${(input.references ?? []).map((r) => r.name).join(", ")}). Ground the design in them.\n\n`
+    : "";
+  parts.push({ type: "text", text: `${refNote}CURRENT BRAND:\n${input.currentMd}\n\nINSTRUCTION:\n${input.instruction}` });
+
   await generateText({
     model: model(env),
     system,
-    prompt: `CURRENT BRAND:\n${input.currentMd}\n\nINSTRUCTION:\n${input.instruction}`,
+    messages: [{ role: "user", content: parts }],
     tools,
     stopWhen: stepCountIs(20),
     maxOutputTokens: 6000,

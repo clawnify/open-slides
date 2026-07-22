@@ -580,12 +580,14 @@ export function App() {
     const rows = await loadDecks();
     if (id === selectedId) rows.length ? selectDeck(rows[0]) : (setSelectedId(null), setSlides([]));
   }
-  // Start a brand-new deck that uses the given brand, seeded from the brand's own
-  // example slides (server falls back to the generic starter if it has none).
-  async function newDeckWithBrand(id: string) {
+  // Start a brand-new deck/document that uses the given brand, seeded from the
+  // brand's own example slides for that format (server falls back to the generic
+  // starter content sent here if the brand has none for it).
+  async function newDeckWithBrand(id: string, format = "16:9") {
+    const isDoc = formatOf(format).kind === "document";
     const created: Deck = await fetch("/api/decks", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: "Untitled deck", brand_id: id, seed_from_brand: true, content: await starterContent("16:9") }),
+      body: JSON.stringify({ title: isDoc ? "Untitled document" : "Untitled deck", brand_id: id, format, seed_from_brand: true, content: await starterContent(format) }),
     }).then((r) => r.json());
     setDecks((ds) => [created, ...ds]);
     selectDeck(created);
@@ -816,7 +818,7 @@ export function App() {
             active={editorBrandId === activeBrandId}
             onBack={() => setEditorBrandId(null)}
             onChanged={loadBrands}
-            onUse={() => newDeckWithBrand(editorBrandId)}
+            onUse={(f) => newDeckWithBrand(editorBrandId, f)}
             onDeleted={async () => { setEditorBrandId(null); const rows = await loadBrands(); if (!rows.find((b) => b.id === brandId)) setBrandId(rows[0]?.id ?? null); setViewKey((k) => k + 1); }}
           />
         ) : (
@@ -831,7 +833,7 @@ export function App() {
               </div>
               <div className="grid grid-cols-3 gap-4">
                 {brands.map((b) => (
-                  <BrandCard key={b.id} brand={b} active={b.id === activeBrandId} onUse={() => newDeckWithBrand(b.id)} onEdit={() => setEditorBrandId(b.id)} />
+                  <BrandCard key={b.id} brand={b} active={b.id === activeBrandId} onUse={(f) => newDeckWithBrand(b.id, f)} onEdit={() => setEditorBrandId(b.id)} />
                 ))}
               </div>
             </div>
@@ -997,7 +999,7 @@ export function App() {
 // ── brand library card ──
 const resolveLogo = (logo: string) => (logo.startsWith("assets/") ? `/api/uploads/${logo.slice("assets/".length)}` : logo);
 function familyCss(f: string) { return /[, ]/.test(f) ? f : `'${f}'`; }
-function BrandCard({ brand, active, onUse, onEdit }: { brand: { id: string; name: string; tokens: BrandTokens }; active: boolean; onUse: () => void; onEdit: () => void }) {
+function BrandCard({ brand, active, onUse, onEdit }: { brand: { id: string; name: string; tokens: BrandTokens }; active: boolean; onUse: (format: string) => void; onEdit: () => void }) {
   const t = brand.tokens;
   return (
     <div className={`overflow-hidden rounded-lg border ${active ? "border-neutral-900 ring-1 ring-neutral-900" : "border-neutral-200"}`}>
@@ -1014,7 +1016,8 @@ function BrandCard({ brand, active, onUse, onEdit }: { brand: { id: string; name
         </div>
         <div className="flex items-center gap-2">
           {active && <span className="flex items-center gap-1 text-xs text-green-600"><Check size={12} /> In use</span>}
-          <button onClick={onUse} className="rounded border border-neutral-200 px-2 py-0.5 text-xs hover:bg-neutral-50">New deck</button>
+          <button onClick={() => onUse("16:9")} className="rounded border border-neutral-200 px-2 py-0.5 text-xs hover:bg-neutral-50">New deck</button>
+          <button onClick={() => onUse("a4-portrait")} title="New A4 document" className="rounded border border-neutral-200 px-2 py-0.5 text-xs hover:bg-neutral-50">New doc</button>
           <button onClick={onEdit} className="text-xs text-neutral-500 hover:text-neutral-900">Edit</button>
         </div>
       </div>
@@ -1024,7 +1027,7 @@ function BrandCard({ brand, active, onUse, onEdit }: { brand: { id: string; name
 
 // ── brand editor (preview + name + prompt + DESIGN.md) ──
 function BrandEditor({ brandId, active, onBack, onChanged, onUse, onDeleted }: {
-  brandId: string; active: boolean; onBack: () => void; onChanged: () => void; onUse: () => void; onDeleted: () => void;
+  brandId: string; active: boolean; onBack: () => void; onChanged: () => void; onUse: (format: string) => void; onDeleted: () => void;
 }) {
   const [name, setName] = useState("");
   const [md, setMd] = useState("");
@@ -1125,7 +1128,8 @@ function BrandEditor({ brandId, active, onBack, onChanged, onUse, onDeleted }: {
         <div className="flex-1" />
         {active && <span className="flex items-center gap-1 text-xs text-green-600"><Check size={13} /> In use on current deck</span>}
         <button onClick={del} className="text-xs text-neutral-400 hover:text-red-500">Delete</button>
-        <button onClick={onUse} className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700">Use for new slides</button>
+        <button onClick={() => onUse("a4-portrait")} className="rounded-md border border-neutral-200 px-3 py-1.5 text-sm hover:bg-neutral-50">New A4 document</button>
+        <button onClick={() => onUse("16:9")} className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700">Use for new slides</button>
       </div>
       <div className="flex min-h-0 flex-1">
         {/* preview */}

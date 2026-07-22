@@ -7,6 +7,7 @@
 // DESIGN.md. Prose around it guides the agent; the JSON drives rendering.
 
 import { CHART_FNS } from "./reveal";
+import { FORMATS, DEFAULT_FORMAT_ID } from "./formats";
 
 export interface BrandTokens {
   colors: { bg: string; text: string; heading: string; accent: string; muted: string };
@@ -137,7 +138,10 @@ scale. Full-bleed images and color-block backgrounds do the heavy lifting.
 ## Example slides
 Three slides that show the system in practice. Each fills the slide canvas,
 styles with the brand variables, and omits alignment so it inherits the brand's
-default (override per slide only when a layout needs it).
+default (override per slide only when a layout needs it). A sub-heading may tag
+its examples with a page format — e.g. \`### Cover (a4-portrait)\` for A4
+document pages; untagged examples are 16:9. New decks seeded from this brand
+start from the examples matching their format.
 
 ### Title
 \`\`\`html
@@ -379,20 +383,44 @@ const fontName = (f: string) => (f.split(",")[0] || "System").replace(/['"]/g, "
 // section. The brand preview renders THESE (not a hardcoded mockup), so the
 // preview faithfully represents the design system and reflects edits — e.g. the
 // agent removing the accent kicker from an example shows up immediately.
-export function extractExampleSlides(designMd: string): string[] {
+//
+// Format tagging: a `### <name> (<format-id>)` sub-heading tags every fenced
+// block under it with that page format (e.g. "### Cover (a4-portrait)");
+// untagged examples are 16:9. This lets ONE brand carry both presentation
+// slides and document pages — deck seeding and AI generation pick the examples
+// matching the deck's format.
+export interface BrandExample {
+  html: string;
+  format: string; // page format id ('16:9' | 'a4-portrait')
+}
+
+export function extractBrandExamples(designMd: string): BrandExample[] {
   const sec = designMd.match(/##\s+Example slides[^\n]*\n([\s\S]*?)(?=\n##\s|$)/i);
   if (!sec) return [];
-  const out: string[] = [];
-  const re = /```(?:html)?\s*\n([\s\S]*?)```/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(sec[1]))) {
-    const html = m[1].trim();
-    if (html) out.push(html);
+  const out: BrandExample[] = [];
+  // Split into ### sub-sections; blocks before the first ### are untagged.
+  const parts = ("\n" + sec[1]).split(/\n(?=###\s)/);
+  for (const part of parts) {
+    const h = part.match(/^###\s+[^\n]*?\(([a-z0-9:-]+)\)\s*\n/i);
+    const format = h && FORMATS[h[1]] ? h[1] : DEFAULT_FORMAT_ID;
+    const re = /```(?:html)?\s*\n([\s\S]*?)```/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(part))) {
+      const html = m[1].trim();
+      if (html) out.push({ html, format });
+    }
   }
   return out;
 }
 
-export function brandGuideHtml(name: string, tokens: BrandTokens, logoSrc = "", examples: string[] = []): string {
+/** The example slides matching one page format (the deck's), HTML only. */
+export function extractExampleSlides(designMd: string, formatId: string = DEFAULT_FORMAT_ID): string[] {
+  return extractBrandExamples(designMd)
+    .filter((e) => e.format === formatId)
+    .map((e) => e.html);
+}
+
+export function brandGuideHtml(name: string, tokens: BrandTokens, logoSrc = "", examples: BrandExample[] = []): string {
   const c = tokens.colors;
   // The example slide is a scaled-down 1280-wide canvas, so size its title/body
   // in container units derived from the px tokens (1 canvas px = 100/1280 cqw of
@@ -412,12 +440,15 @@ export function brandGuideHtml(name: string, tokens: BrandTokens, logoSrc = "", 
     ? `<div class="sec"><h2>Logo</h2><div class="logobox">${logoImg}</div></div>`
     : "";
 
-  // Render the DESIGN.md's own example slides (true 1280x720 canvases, scaled by
-  // JS). Falls back to a single hardcoded mockup when the brand has no examples.
+  // Render the DESIGN.md's own example slides — each on a true canvas of ITS
+  // format (16:9 slide or A4 page), scaled to fit by JS. Falls back to a single
+  // hardcoded mockup when the brand has no examples.
+  const frameFor = (ex: BrandExample) => {
+    const f = FORMATS[ex.format] ?? FORMATS[DEFAULT_FORMAT_ID];
+    return `<div class="slideframe" style="aspect-ratio:${f.canvas.width}/${f.canvas.height}"><div class="slidecanvas" data-w="${f.canvas.width}" style="width:${f.canvas.width}px;height:${f.canvas.height}px">${ex.html}${logoImg}</div></div>`;
+  };
   const examplesSec = examples.length
-    ? `<div class="sec"><h2>Example slides</h2>${examples
-        .map((ex) => `<div class="slideframe"><div class="slidecanvas">${ex}${logoImg}</div></div>`)
-        .join("")}</div>`
+    ? `<div class="sec"><h2>Example slides</h2>${examples.map(frameFor).join("")}</div>`
     : `<div class="sec"><h2>Example slide</h2>
     <div class="slide"><div class="k">Your kicker</div><h3>Big bold title</h3><p>A supporting line in the body font and color, set on the brand canvas.</p>${logoImg}</div>
   </div>`;
@@ -438,11 +469,12 @@ ${brandHead(tokens)}
   .slide .k{font:600 13px/1 var(--r-heading-font);letter-spacing:.16em;text-transform:uppercase;color:var(--brand-accent)}
   .slide h3{font:700 ${headingCqw}cqw/1.04 var(--r-heading-font);color:var(--brand-heading);margin:8px 0 0;letter-spacing:-1px}
   .slide p{font:400 ${bodyCqw}cqw/1.4 var(--r-main-font);color:var(--brand-muted);margin:12px 0 0;max-width:72%}
-  /* Real DESIGN.md example slides: a true 1280x720 canvas scaled to fit (JS sets
-     the transform). Type scale + alignment mirror the deck defaults so plain
-     h1/h2/p inherit the brand. */
-  .slideframe{position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;border:1px solid #eee;border-radius:14px;background:var(--brand-bg);margin-bottom:12px}
-  .slidecanvas{position:absolute;top:0;left:0;width:1280px;height:720px;transform-origin:top left;overflow:hidden;text-align:var(--brand-align,left)}
+  /* Real DESIGN.md example slides: a true format-sized canvas scaled to fit (JS
+     sets the transform; per-example inline styles set the size/aspect). Type
+     scale + alignment mirror the deck defaults so plain h1/h2/p inherit the
+     brand. */
+  .slideframe{position:relative;width:100%;overflow:hidden;border:1px solid #eee;border-radius:14px;background:var(--brand-bg);margin-bottom:12px}
+  .slidecanvas{position:absolute;top:0;left:0;transform-origin:top left;overflow:hidden;text-align:var(--brand-align,left)}
   .slidecanvas > div{align-items:var(--brand-justify,flex-start);text-align:var(--brand-align,left)}
   .slidecanvas h1{font:700 var(--brand-heading-size)/1.04 var(--r-heading-font);color:var(--brand-heading);letter-spacing:-1px}
   .slidecanvas h2{font:700 var(--brand-subheading-size)/1.1 var(--r-heading-font);color:var(--brand-heading)}
@@ -485,7 +517,7 @@ ${brandHead(tokens)}
 </div>
 <script>${CHART_FNS}</script>
 <script>
-  function scaleSlides(){document.querySelectorAll('.slideframe').forEach(function(f){var c=f.querySelector('.slidecanvas');if(c)c.style.transform='scale('+(f.clientWidth/1280)+')';});}
+  function scaleSlides(){document.querySelectorAll('.slideframe').forEach(function(f){var c=f.querySelector('.slidecanvas');if(c)c.style.transform='scale('+(f.clientWidth/parseFloat(c.getAttribute('data-w')||'1280'))+')';});}
   try{ renderCharts(document); }catch(e){}
   scaleSlides(); addEventListener('resize', scaleSlides);
 </script>
