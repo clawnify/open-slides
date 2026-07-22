@@ -116,6 +116,20 @@ Replication loop: study the original → author the brand's DESIGN.md (tokens +
 guidelines + example pages) → build the deck/document → compare each rendered
 page (`GET /api/decks/{id}/slide/{n}`) against the original's pages and iterate.
 
+Attached references are also **seen by the in-app brand AI**: every reference
+(images + PDFs) is attached to `POST /api/brands/{id}/generate`, so an
+instruction like "based on the original file, create the brand" is grounded in
+the actual file.
+
+**Format-tagged example slides.** In a brand's `## Example slides`, a
+`### <name> (<format-id>)` sub-heading tags its fenced examples with a page
+format — e.g. `### Cover (a4-portrait)`; untagged examples are 16:9. One brand
+can carry both slide and document layouts. `POST /api/decks` with
+`seed_from_brand: true` seeds the new deck from the examples matching its
+`format`, so author a replicated document template's page layouts as
+`(a4-portrait)`-tagged examples and every new document from that brand starts
+as the replicated template.
+
 ## API
 
 | Method | Path | Purpose |

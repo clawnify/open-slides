@@ -10,7 +10,7 @@ import {
 } from "./uploads";
 import { revealDoc } from "./reveal";
 import { renderDeckPdf, renderSlidePng, PdfRenderError } from "./pdf";
-import { parseTokens, brandHead, brandLogoTag, brandGuideHtml, extractExampleSlides, setTokensInMd, DEFAULT_BRAND_MD, type BrandTokens } from "./brand";
+import { parseTokens, brandHead, brandLogoTag, brandGuideHtml, extractExampleSlides, extractBrandExamples, setTokensInMd, DEFAULT_BRAND_MD, type BrandTokens } from "./brand";
 import { TEMPLATES, templatesFor } from "./templates";
 import { FORMATS, DEFAULT_FORMAT_ID, safeFormat, type PageFormat } from "./formats";
 import { generate, editBrand, hasAiKey, type DeckOps, type DeckSlide, type AuthoredSlide, type BrandOps, type BrandTokensPatch } from "./ai";
@@ -100,14 +100,15 @@ app.get("/api/decks/:id", async (c) => {
 app.post("/api/decks", async (c) => {
   const b = await c.req.json<Partial<Deck> & { seed_from_brand?: boolean }>();
   if (!b.title?.trim()) return c.json({ error: "title is required" }, 400);
-  // "Use for new slides" seeds the deck from the brand's own example slides so it
-  // starts on-brand with real layouts; falls back to whatever content was sent.
+  const format = b.format && FORMATS[b.format] ? b.format : DEFAULT_FORMAT_ID;
+  // "Use for new slides" seeds the deck from the brand's own example slides — the
+  // ones tagged for THIS deck's format (untagged = 16:9) — so it starts on-brand
+  // with real layouts; falls back to whatever content was sent.
   let content = b.content ?? "";
   if (b.seed_from_brand && b.brand_id) {
-    const examples = extractExampleSlides(await brandMdFor(b.brand_id));
+    const examples = extractExampleSlides(await brandMdFor(b.brand_id), format);
     if (examples.length) content = examples.join("\n\n---\n\n");
   }
-  const format = b.format && FORMATS[b.format] ? b.format : DEFAULT_FORMAT_ID;
   const res = await run(
     "INSERT INTO decks (title, content, theme, brand_id, format, nav, instructions) VALUES (?, ?, ?, ?, ?, ?, ?)",
     [b.title.trim(), content, b.theme ?? "black", b.brand_id ?? null, format, JSON.stringify(DEFAULT_NAV), b.instructions ?? ""],
@@ -360,6 +361,20 @@ app.post("/api/brands/:id/generate", async (c) => {
 
   let md = existing.design_md || DEFAULT_BRAND_MD;
 
+  // The brand's original source files (role='reference') are attached to the
+  // model as images/PDF documents, so "based on the original file" instructions
+  // are grounded in the actual file, not a guess. Bounded like inlineAssets.
+  const refRows = await query<Asset>(
+    "SELECT * FROM assets WHERE role = 'reference' AND brand_id = ? ORDER BY created_at ASC",
+    [id],
+  );
+  const references: { name: string; contentType: string; data: string }[] = [];
+  for (const r of refRows.slice(0, 4)) {
+    const obj = await getUploadBytes(r.key);
+    if (!obj || obj.data.byteLength > 8 * 1024 * 1024) continue;
+    references.push({ name: r.name, contentType: obj.contentType, data: arrayBufferToBase64(obj.data) });
+  }
+
   const enc = new TextEncoder();
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
@@ -405,7 +420,7 @@ app.post("/api/brands/:id/generate", async (c) => {
 
   const run$ = (async () => {
     try {
-      await editBrand(c.env, { instruction: instruction.trim(), currentMd: md }, ops);
+      await editBrand(c.env, { instruction: instruction.trim(), currentMd: md, references }, ops);
       await send({ type: "done" });
     } catch (err) {
       await send({ type: "error", error: String(err instanceof Error ? err.message : err) });
@@ -427,11 +442,12 @@ app.get("/api/brands/:id/preview", async (c) => {
   const row = await get<Brand>("SELECT * FROM brands WHERE id = ?", [c.req.param("id")]);
   const md = row?.design_md || DEFAULT_BRAND_MD;
   const tokens = parseTokens(md);
-  // The preview renders the DESIGN.md's own example slides — bake infographics and
-  // point media at the served route so they look exactly like real slides.
+  // The preview renders the DESIGN.md's own example slides (every format, each on
+  // its own canvas) — bake infographics and point media at the served route so
+  // they look exactly like real slides.
   const theme = { colorPrimary: tokens.colors.accent, colorBg: tokens.colors.bg };
   const examples = await Promise.all(
-    extractExampleSlides(md).map(async (ex) => rewriteAssetsForView(await bakeInfographics(ex, theme))),
+    extractBrandExamples(md).map(async (ex) => ({ ...ex, html: rewriteAssetsForView(await bakeInfographics(ex.html, theme)) })),
   );
   return c.html(brandGuideHtml(row?.name || "Brand", tokens, resolveLogoForView(tokens.logo), examples));
 });
