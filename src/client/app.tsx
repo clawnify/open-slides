@@ -121,28 +121,47 @@ function assetRefFromViewSrc(src: string): string | null {
 
 // Swap the clicked image's src. sid-first; if the sid doesn't land on an IMG
 // (older markup where live/source element indices diverge), fall back to
-// matching the clicked src — and report success so the caller can surface a
-// failure instead of silently dropping the user's upload.
-function applyImgHtml(chunk: string, sid: number, ref: string, clickedSrc?: string): { chunk: string; swapped: boolean } {
+// matching the clicked src; as a last resort fill the first empty placeholder
+// slot (that's always what a placeholder click means). Logs each step so a
+// failing swap is diagnosable from the console, and reports how it matched.
+function applyImgHtml(chunk: string, sid: number, ref: string, clickedSrc?: string): { chunk: string; swapped: string | null } {
   const { attrs, body } = parseHtmlSlide(chunk);
-  let swapped = false;
+  let swapped: string | null = null;
   const next = buildHtmlSlide(attrs, withBody(body, (r) => {
+    const imgs = [...r.querySelectorAll("img")];
     const el = elBySid(r, sid);
+    console.info("[img-swap] sid=%d clickedSrc=%s → el=%s | imgs=%o", sid, clickedSrc, el?.tagName, imgs.map((i) => i.getAttribute("src")));
     if (el && el.tagName === "IMG") {
       el.setAttribute("src", ref);
-      swapped = true;
+      swapped = "sid";
       return;
     }
     const want = clickedSrc ? assetRefFromViewSrc(clickedSrc) : null;
-    if (want) {
-      const match = [...r.querySelectorAll("img")].find((im) => im.getAttribute("src") === want);
-      if (match) {
-        match.setAttribute("src", ref);
-        swapped = true;
-      }
+    const bySrc = want ? imgs.find((im) => im.getAttribute("src") === want) : undefined;
+    if (bySrc) {
+      bySrc.setAttribute("src", ref);
+      swapped = "src";
+      return;
+    }
+    const slot = imgs.find((im) => im.getAttribute("src") === "assets/placeholder.svg");
+    if (slot) {
+      slot.setAttribute("src", ref);
+      swapped = "placeholder-slot";
     }
   }));
+  console.info("[img-swap] result=%s", swapped ?? "FAILED");
   return { chunk: next, swapped };
+}
+
+// alert() is silently suppressed inside sandboxed iframes (the dashboard embeds
+// the app) — surface user-facing errors as an in-page toast instead.
+function showToast(msg: string) {
+  const el = document.createElement("div");
+  el.textContent = msg;
+  el.style.cssText =
+    "position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#111;color:#fff;padding:10px 16px;border-radius:8px;font:500 13px/1.4 system-ui;z-index:9999;max-width:80%;box-shadow:0 4px 16px rgba(0,0,0,.25)";
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 6000);
 }
 function removeElHtml(chunk: string, sid: number): string {
   const { attrs, body } = parseHtmlSlide(chunk);
@@ -527,15 +546,17 @@ export function App() {
     applyToSlide(i, () => applyTextHtml(chunk, sid, newText));
   }
   async function onImgClick(sid: number, src: string) {
+    console.info("[img-swap] img-click received sid=%d src=%s slide=%d", sid, src, selRef.current);
     const a = await pickAndUpload("image/*");
     if (!a) return;
     const i = selRef.current; const chunk = slidesRef.current[i] ?? "";
     const { chunk: next, swapped } = applyImgHtml(chunk, sid, `assets/${a.key}`, src);
     if (!swapped) {
-      alert("Couldn't locate the clicked image in this slide's markup — the upload is saved; add it via the Code tab or the Media button.");
+      showToast("Couldn't locate the clicked image in this slide — the upload is saved; add it via the Code tab or the Media button.");
       return;
     }
     applyToSlide(i, () => next);
+    showToast("Image added to the slide.");
   }
   // Upload a new image/video and add it to the current slide.
   async function addMedia() {
