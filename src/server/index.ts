@@ -813,10 +813,15 @@ app.delete("/api/assets/:id", async (c) => {
 });
 
 app.get("/api/uploads/:key", async (c) => {
-  const obj = await getUpload(c.req.param("key"));
+  const key = c.req.param("key");
+  const obj = await getUpload(key);
   if (!obj) return c.json({ error: "Not found" }, 404);
+  // Uploaded files never change under a key → cache hard. The virtual
+  // placeholder is code-defined and DOES change with deploys → cache briefly,
+  // or browsers hold a stale copy for a year after any fix to it.
+  const cache = key === PLACEHOLDER_KEY ? "public, max-age=300" : "public, max-age=31536000";
   return new Response(obj.data, {
-    headers: { "Content-Type": obj.contentType, "Cache-Control": "public, max-age=31536000" },
+    headers: { "Content-Type": obj.contentType, "Cache-Control": cache },
   });
 });
 
