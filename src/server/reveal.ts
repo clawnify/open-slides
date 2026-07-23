@@ -404,6 +404,12 @@ export function revealDoc(opts: DocOpts): string {
      (a slide/brand can still opt into uppercase via its own text-transform). The
      kicker keeps its own uppercase rule. */
   .reveal .slides section.design :is(h1, h2, h3, h4, h5, h6) { text-transform: none; }
+  /* reveal's themes cap media at 95% (.reveal img/video/iframe {max-width/height:
+     95%}) — a markdown-era nicety that shears ~5% off designed full-bleed images
+     (a hero photo with width:100% stops short of its rounded container in the
+     EDITOR only; the brand preview and the PDF don't load theme CSS, which made
+     this maddening to spot). Designed slides size media explicitly — uncap. */
+  .reveal .slides section.design :is(img, video, iframe) { max-width: none; max-height: none; }
   /* Suppress fragment transitions while toggling present mode (see syncPresentMode). */
   .reveal.no-frag-anim .fragment { transition: none !important; }
   .reveal .slides section.design h1 { font-size: var(--brand-heading-size); }
