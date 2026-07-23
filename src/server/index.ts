@@ -248,6 +248,12 @@ app.post("/api/decks/:id/generate", async (c) => {
           tokens: parseTokens(designMd),
           designMd,
           format,
+          // The brand's layouts for this format (copy-first grounding), and its
+          // other-format layouts as visual-language reference when none match.
+          brandExamples: extractExampleSlides(designMd, format.id),
+          otherFormatExamples: extractBrandExamples(designMd)
+            .filter((e) => e.format !== format.id)
+            .map((e) => e.html),
           templates: templatesFor(format),
           currentIndex: b.current_index ?? 0,
           deck: snapshot(),

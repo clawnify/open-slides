@@ -56,6 +56,11 @@ interface GenInput {
   tokens: BrandTokens;
   designMd: string; // the brand's full DESIGN.md (prose layout/voice guidance + tokens)
   format: PageFormat; // the deck's page format (16:9 slides / A4 document pages)
+  // The brand's example slides for THIS format (already filtered) — embedded in
+  // the prompt with copy-first semantics, and the examples of other formats as
+  // visual-language reference when this format has none.
+  brandExamples: string[];
+  otherFormatExamples: string[];
   templates: SlideTemplate[];
   currentIndex?: number; // the slide the user is looking at
   deck: DeckSlide[]; // the deck's current slides (indexed) at the start of the turn
@@ -72,10 +77,40 @@ function listDeck(deck: DeckSlide[], currentIndex?: number): string {
     .join("\n---\n");
 }
 
-function systemPrompt(tokens: BrandTokens, templates: SlideTemplate[], format: PageFormat): string {
+function systemPrompt(
+  tokens: BrandTokens,
+  templates: SlideTemplate[],
+  format: PageFormat,
+  brandExamples: string[] = [],
+  otherFormatExamples: string[] = [],
+): string {
   const cw = format.canvas.width;
   const ch = format.canvas.height;
   const isDoc = format.kind === "document";
+  // The brand's own layouts are the strongest grounding there is — embed them
+  // verbatim with copy-first semantics instead of hoping the model fishes them
+  // out of the DESIGN.md prose.
+  const examplesBlock = brandExamples.length
+    ? `
+
+## THE BRAND'S PAGE LAYOUTS FOR THIS FORMAT — copy-first, do not reinvent
+The brand defines these exact ${format.id} layouts. When a requested slide/page
+matches one of these types (a cover, a card/section page, a data page, a back
+cover…), START FROM that example's markup VERBATIM and change ONLY the content
+(text, numbers, image refs). Do not compose a different layout for a covered
+type. For types not covered, compose new markup in the SAME visual language
+(same spacing rhythm, same band/card/hairline motifs, same type usage).
+${brandExamples.map((ex, i) => `### Brand layout ${i + 1}\n${ex}`).join("\n\n")}`
+    : otherFormatExamples.length
+      ? `
+
+## BRAND LAYOUTS (authored for a DIFFERENT page format)
+This brand's example layouts target another format, so don't paste them as-is —
+but they define the brand's visual language (band heroes, card rows, hairlines,
+type usage). ADAPT that language to this ${cw}x${ch} canvas rather than
+inventing a generic look.
+${otherFormatExamples.slice(0, 3).map((ex, i) => `### Reference layout ${i + 1}\n${ex}`).join("\n\n")}`
+      : "";
   const docMode = isDoc
     ? `
 
@@ -90,7 +125,7 @@ function systemPrompt(tokens: BrandTokens, templates: SlideTemplate[], format: P
 - Typical structure: a cover page, content pages (sections/tables/prose), a back
   cover with contact details. The brand logo overlays every page automatically.`
     : "";
-  return `You are a ${isDoc ? "document designer" : "slide designer"} for "Open Slides", a reveal.js ${isDoc ? "deck tool being used in A4 document mode" : "deck tool"}. You build and refine ${isDoc ? "documents" : "decks"} by calling small tools in a loop, and you ALWAYS match the brand.${docMode}
+  return `You are a ${isDoc ? "document designer" : "slide designer"} for "Open Slides", a reveal.js ${isDoc ? "deck tool being used in A4 document mode" : "deck tool"}. You build and refine ${isDoc ? "documents" : "decks"} by calling small tools in a loop, and you ALWAYS match the brand.${docMode}${examplesBlock}
 
 ## How you work (a multi-step loop)
 1. Call \`read_brand_design\` FIRST to study the brand's voice, layout, spacing and rules.
@@ -106,12 +141,6 @@ Match the work to the request:
 - "edit/fix/refine/add X to this slide" → ONE edit_slide on the CURRENT slide (the one the user is looking at). Touch no other slide.
 - "add a slide about…" → add_slide(s) after the current slide.
 - "make a deck about…" / "start over" → turn the current slides INTO the new deck: edit the existing slides in place and add/delete as needed (don't leave leftover placeholder slides).
-
-## Brand example slides are format-tagged
-In the brand's "## Example slides", a sub-heading may tag its examples with a
-page format — e.g. "### Cover (a4-portrait)"; untagged examples are 16:9. This
-deck's format is ${format.id}: follow ONLY the examples matching it and ignore
-the rest — they are shaped for a different canvas.
 
 ## SURGICAL EDITS — the most important rule for edit_slide
 edit_slide REPLACES the whole slide, so you must rebuild it. Reproduce the
@@ -285,7 +314,7 @@ ${input.instructions.trim()}
 
   await generateText({
     model: model(env),
-    system: systemPrompt(input.tokens, input.templates, input.format),
+    system: systemPrompt(input.tokens, input.templates, input.format, input.brandExamples, input.otherFormatExamples),
     prompt: `The user is currently looking at slide ${input.currentIndex ?? 0} (marked "← CURRENT SLIDE" below). When the request says "this slide", "the slide", or doesn't name a specific slide, act on slide ${input.currentIndex ?? 0} and no other — even if another slide has similar or identical text.
 
 ${deckInstructions}CURRENT DECK (index, notes, then the slide HTML):
