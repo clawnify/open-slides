@@ -10,7 +10,7 @@ import {
   PLACEHOLDER_KEY,
 } from "./uploads";
 import { revealDoc } from "./reveal";
-import { renderDeckPdf, renderSlidePng, PdfRenderError } from "./pdf";
+import { renderDeckPdf, renderSlidePng, renderSlidePngLink, PdfRenderError } from "./pdf";
 import { parseTokens, brandHead, brandLogoTag, brandGuideHtml, extractExampleSlides, extractBrandExamples, setTokensInMd, DEFAULT_BRAND_MD, type BrandTokens } from "./brand";
 import { TEMPLATES, templatesFor } from "./templates";
 import { FORMATS, DEFAULT_FORMAT_ID, safeFormat, type PageFormat } from "./formats";
@@ -604,6 +604,12 @@ app.get("/api/decks/:id/slide/:n", async (c) => {
   const format = safeFormat(row.format);
   try {
     const html = await slidePrintHtml(chunks[n], row.theme, tokens, format);
+    // ?output=url → a presigned link instead of bytes: agents calling through
+    // API proxies can't receive binary bodies, but they can fetch/vision a URL.
+    if (c.req.query("output") === "url") {
+      const link = await renderSlidePngLink(c.env.CLAWNIFY_TOKEN, html, format.page, { filename: `slide-${n + 1}.png` });
+      return c.json(link);
+    }
     const png = await renderSlidePng(c.env.CLAWNIFY_TOKEN, html, format.page);
     return new Response(png, { headers: { "Content-Type": "image/png", "Cache-Control": "no-store" } });
   } catch (err) {
