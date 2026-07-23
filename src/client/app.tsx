@@ -109,12 +109,40 @@ function applyAnimHtml(chunk: string, sid: number, effect: string): string {
     else if (effect) el.classList.add("fragment", effect);
   }));
 }
-function applyImgHtml(chunk: string, sid: number, ref: string): string {
+// The clicked image's src as the canvas served it (/api/uploads/<key> or a
+// bare assets/<key>) → the source reference (assets/<key>), for src-matching.
+function assetRefFromViewSrc(src: string): string | null {
+  try {
+    const u = new URL(src, location.origin);
+    if (u.pathname.startsWith("/api/uploads/")) return "assets/" + u.pathname.slice("/api/uploads/".length);
+  } catch { /* not a URL */ }
+  return src.startsWith("assets/") ? src : null;
+}
+
+// Swap the clicked image's src. sid-first; if the sid doesn't land on an IMG
+// (older markup where live/source element indices diverge), fall back to
+// matching the clicked src — and report success so the caller can surface a
+// failure instead of silently dropping the user's upload.
+function applyImgHtml(chunk: string, sid: number, ref: string, clickedSrc?: string): { chunk: string; swapped: boolean } {
   const { attrs, body } = parseHtmlSlide(chunk);
-  return buildHtmlSlide(attrs, withBody(body, (r) => {
+  let swapped = false;
+  const next = buildHtmlSlide(attrs, withBody(body, (r) => {
     const el = elBySid(r, sid);
-    if (el && el.tagName === "IMG") el.setAttribute("src", ref);
+    if (el && el.tagName === "IMG") {
+      el.setAttribute("src", ref);
+      swapped = true;
+      return;
+    }
+    const want = clickedSrc ? assetRefFromViewSrc(clickedSrc) : null;
+    if (want) {
+      const match = [...r.querySelectorAll("img")].find((im) => im.getAttribute("src") === want);
+      if (match) {
+        match.setAttribute("src", ref);
+        swapped = true;
+      }
+    }
   }));
+  return { chunk: next, swapped };
 }
 function removeElHtml(chunk: string, sid: number): string {
   const { attrs, body } = parseHtmlSlide(chunk);
@@ -498,11 +526,16 @@ export function App() {
     const chunk = slidesRef.current[i] ?? "";
     applyToSlide(i, () => applyTextHtml(chunk, sid, newText));
   }
-  async function onImgClick(sid: number, _src: string) {
+  async function onImgClick(sid: number, src: string) {
     const a = await pickAndUpload("image/*");
     if (!a) return;
     const i = selRef.current; const chunk = slidesRef.current[i] ?? "";
-    applyToSlide(i, () => applyImgHtml(chunk, sid, `assets/${a.key}`));
+    const { chunk: next, swapped } = applyImgHtml(chunk, sid, `assets/${a.key}`, src);
+    if (!swapped) {
+      alert("Couldn't locate the clicked image in this slide's markup — the upload is saved; add it via the Code tab or the Media button.");
+      return;
+    }
+    applyToSlide(i, () => next);
   }
   // Upload a new image/video and add it to the current slide.
   async function addMedia() {
@@ -511,6 +544,12 @@ export function App() {
     const ref = `assets/${a.key}`;
     const isVideo = (a.content_type || "").startsWith("video/");
     const i = sel; const chunk = slides[i] ?? "";
+    // If the slide has an empty placeholder slot, fill it — an APPENDED image
+    // sits after (and underneath) a full-page absolute wrapper, i.e. invisible.
+    if (!isVideo && chunk.includes('src="assets/placeholder.svg"')) {
+      applyToSlide(i, (c) => c.replace('src="assets/placeholder.svg"', `src="${ref}"`)); // first slot only
+      return;
+    }
     const { attrs, body } = parseHtmlSlide(chunk);
     const tag = isVideo
       ? `<video controls src="${ref}" style="max-width:100%;border-radius:var(--brand-radius)"></video>`
