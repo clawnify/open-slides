@@ -12,7 +12,10 @@ export function initUploads(bucket: R2Bucket) {
 // swaps in a real upload. Handled here (not in a route) so every consumer —
 // the /api/uploads route, PDF inlining, logo resolution — resolves it alike.
 export const PLACEHOLDER_KEY = "placeholder.svg";
-const PLACEHOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450">
+// preserveAspectRatio="slice" gives the SVG itself object-fit:cover semantics:
+// with only "meet" (the default), the artwork letterboxes inside a container of
+// a different aspect ratio, leaving unpainted margins that break rounded clips.
+const PLACEHOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450" preserveAspectRatio="xMidYMid slice">
 <rect width="800" height="450" fill="#E9E7E2"/>
 <g fill="none" stroke="#A9A59D" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
 <rect x="336" y="156" width="128" height="96" rx="10"/>
