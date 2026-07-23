@@ -180,7 +180,12 @@ data
   column); keep 3-6 items with short labels; do NOT style it yourself — it inherits the
   brand colors. Use a chart (above) for quantitative series, an infographic for concepts.
 - Entrance animations (optional): add \`class="fragment fade-up"\` to elements that should animate in on click. Effects: fade-up, fade-down, fade-left, fade-right, zoom-in, grow. They play only while presenting.
-- Only reference images the user explicitly provides as \`assets/<name>\`; otherwise omit images.
+- Images: reference files the user provides as \`assets/<name>\`. For an image slot the
+  user will fill LATER (a client photo, a product shot), use the built-in placeholder
+  \`<img src="assets/placeholder.svg" style="...">\` — it renders as a neutral photo box and
+  clicking it (or any overlay covering it) in the editor swaps in a real image. For a
+  hero-with-overlay (photo behind a gradient + caption): absolutely-position the img to
+  fill a relative container, then layer a gradient div and the text above it.
 
 ## Speaker notes — ALWAYS write them
 add_slide and edit_slide take a \`notes\` field: 1-3 sentences of speaker notes for
@@ -373,6 +378,7 @@ Keep visuals and prose IN SYNC: when the instruction implies a visual change ("d
 If the brand's ORIGINAL files are attached (images/PDF of the document this brand replicates) and the instruction asks to create/replicate the brand from them, this is a REPLICATION, and the bar is "a page from this brand is mistakable for a page of the original":
 1. GROUND everything in the original: extract its real colors (sample the exact hexes you see), font roles (serif/sans display vs body), spacing and page structures. Do not invent a generic look.
 2. REPLACE the ENTIRE "## Example slides" section (write_guidelines) — never keep the default/generic examples. Author ONE example per distinctive page type of the original (cover, content/card page, data page, back cover…), tagged with the format matching the original's page shape (an A4 portrait document → "(a4-portrait)").
+2b. PHOTO AREAS: wherever the original has a photo or a photo placeholder (a hero image, a full-bleed back cover), author a REAL image slot — \`<img src="assets/placeholder.svg">\` absolutely filling a relative container, with the original's gradient/scrim and text layered above it — never a plain CSS-gradient div. The placeholder renders as a neutral photo box and the user clicks it to drop in the client's photo.
 3. SIZE CONVERSION — the #1 replication mistake. Token sizes and example px are in CANVAS px, and the A4 canvas (1240 wide) is larger than a real A4 page: 1pt in the original ≈ 2.1 canvas px (1px at 96dpi ≈ 1.56 canvas px). So a 10pt body → sizes.body ≈ 21; a 24pt title → ≈ 50. NEVER set sizes.body below 18 for a document brand — 12-14 renders unreadably small.
 4. MEASURE, don't eyeball, when authoring: the A4 canvas is 1240x1754 ≈ 210x297mm, so 1mm ≈ 5.9px and 1pt ≈ 2.1px. Read margins, band heights, gaps and type sizes off the original and convert.
 5. VERIFY WITH YOUR EYES — the loop that gets you to pixel-perfect: after writing the examples, call view_examples for the format and COMPARE each render against the attached original page by page — layout, proportions, type scale, colors, weights, spacing. Fix every visible mismatch (edit_guidelines / update_tokens) and view again. Repeat until a rendered example is mistakable for the original page. Do not stop while anything is visibly off.`;
