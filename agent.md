@@ -161,6 +161,29 @@ as the replicated template.
 `white`, `black`, `league`, `beige`, `sky`, `night`, `serif`, `simple`,
 `solarized`, `moon`, `dracula`, `blood`.
 
+## Authoring ON-BRAND — read this before writing any slide
+
+A deck or document is only on-brand if it is built FROM the brand. Never
+hand-invent generic layouts ("Welcome to…", title + bullets, big stat) when a
+brand exists — that produces off-brand output even with the right colors.
+
+1. **Read the brand first.** `GET /api/brands/{id}` → `design_md` IS the design
+   system: tokens, written guidelines, and **Example slides** — the brand's real
+   page layouts, possibly format-tagged (e.g. `### Cover (a4-portrait)`).
+2. **Match the format to the brand's examples.** A brand replicating an A4
+   document carries `(a4-portrait)` examples — create
+   `POST /api/decks { format: "a4-portrait", … }`, not a 16:9 deck. A 16:9 deck
+   from such a brand gets colors only and NO layouts.
+3. **Preferred: seed from the brand.** `POST /api/decks { brand_id, format,
+   seed_from_brand: true }` — the deck starts as the brand's example pages for
+   that format. Then edit CONTENT surgically (swap placeholder text, keep the
+   markup/layout) via `PUT`.
+4. **Or let the built-in AI author it:** `POST /api/decks/{id}/generate`
+   (`sync: true`) — it grounds in the brand's DESIGN.md + the format's examples
+   automatically and can look at rendered slides while working.
+5. **Verify like a designer:** render pages with `GET /api/decks/{id}/slide/{n}`
+   and compare against the brand's examples before handing over.
+
 ## Authoring flow
 
 1. Read the brief. Pick the brand (`GET /api/brands`) and pass its `brand_id`.
