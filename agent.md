@@ -184,6 +184,19 @@ brand exists — that produces off-brand output even with the right colors.
 5. **Verify like a designer:** render pages with `GET /api/decks/{id}/slide/{n}`
    and compare against the brand's examples before handing over.
 
+**Selecting the brand for generation.** The generate endpoint always uses the
+DECK's brand — there is no per-request brand. Set it at creation
+(`POST /api/decks { brand_id, … }`) or switch it any time with
+`PUT /api/decks/{id} { "brand_id": "…" }`, then generate.
+
+**Editing an existing slide via API.** Two ways:
+- *Surgical:* `GET /api/decks/{id}` → `content` is one document, slides split by
+  a line containing only `---`. Edit exactly the chunk you mean (keep its
+  markup/layout, change the content) and `PUT` the full `content` back.
+- *AI:* `POST /api/decks/{id}/generate { "prompt": "…", "current_index": N }` —
+  the agent loop treats slide `N` as "the slide the user is looking at", so
+  "fix the headline on this slide" edits slide `N` and nothing else.
+
 ## Authoring flow
 
 1. Read the brief. Pick the brand (`GET /api/brands`) and pass its `brand_id`.
