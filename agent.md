@@ -103,6 +103,14 @@ There is no media library to list: an asset exists only while a slide (or a
 brand logo) references it. Remove the reference and the file is garbage-collected
 from storage, so don't upload media you aren't going to place on a slide.
 
+**Image placeholders.** `assets/placeholder.svg` is a built-in virtual asset (no
+upload needed, never garbage-collected): use it for image slots the user fills
+later — it renders as a neutral "Click to add image" box in the editor, the
+present view and the PDF, and clicking it (even under a gradient/caption
+overlay) opens the picker and swaps in a real upload. Hero-with-overlay pattern:
+absolutely-position the img in a relative container, layer the gradient div and
+text above it.
+
 ## Brand reference originals
 
 When you replicate an existing template (a client's PDF, a branded document),

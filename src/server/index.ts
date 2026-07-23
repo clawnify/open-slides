@@ -7,6 +7,7 @@ import {
   getUploadBytes,
   deleteUpload,
   makeKey,
+  PLACEHOLDER_KEY,
 } from "./uploads";
 import { revealDoc } from "./reveal";
 import { renderDeckPdf, renderSlidePng, PdfRenderError } from "./pdf";
@@ -763,7 +764,9 @@ app.post("/api/assets", async (c) => {
 
   let key = makeKey(file.name || "file");
   const clash = await get<{ id: string }>("SELECT id FROM assets WHERE key = ?", [key]);
-  if (clash) {
+  // PLACEHOLDER_KEY is virtual (served from a constant) — a real upload with
+  // that name would be shadowed, so suffix it like a clash.
+  if (clash || key === PLACEHOLDER_KEY) {
     const dot = key.lastIndexOf(".");
     const suffix = lower8();
     key = dot > 0 ? `${key.slice(0, dot)}-${suffix}${key.slice(dot)}` : `${key}-${suffix}`;

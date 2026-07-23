@@ -89,7 +89,7 @@ export const TEMPLATES: SlideTemplate[] = [
     name: "Image + text",
     body: `<!-- html -->
 <div style="position:absolute;inset:0;display:grid;grid-template-columns:1fr 1fr;align-items:center;box-sizing:border-box">
-  <img src="assets/your-image.png" alt="" style="width:100%;height:100%;object-fit:cover" />
+  <img src="assets/placeholder.svg" alt="" style="width:100%;height:100%;object-fit:cover" />
   <div style="padding:0 8%">
     <div class="kicker" style="font-size:20px">Feature</div>
     <h2 style="font:700 var(--brand-subheading-size)/1.06 var(--r-heading-font);margin:8px 0 0;color:var(--brand-heading)">Show, then tell</h2>
@@ -101,7 +101,7 @@ export const TEMPLATES: SlideTemplate[] = [
     id: "full-bleed",
     name: "Full-bleed image",
     body: `<!-- html -->
-<!-- .slide: data-background-image="assets/your-image.png" data-background-size="cover" -->
+<!-- .slide: data-background-image="assets/placeholder.svg" data-background-size="cover" -->
 <div style="position:absolute;left:9%;bottom:9%;max-width:70%">
   <h2 style="font:700 var(--brand-heading-size)/1.05 var(--r-heading-font);margin:0;color:#fff;text-shadow:0 2px 24px rgba(0,0,0,.5)">Caption over a full-bleed photo</h2>
 </div>`,
@@ -131,10 +131,15 @@ export const DOC_TEMPLATES: SlideTemplate[] = [
   {
     id: "doc-cover",
     name: "Cover",
-    body: docWrap(`  <img src="assets/your-image.png" alt="" style="width:100%;height:32%;object-fit:cover;border-radius:var(--brand-radius)" />
-  <div class="kicker" style="font-size:22px;margin-top:56px">Document type · Confidential</div>
-  <h1 style="margin:16px 0 0;color:var(--brand-heading)">One-line positioning statement</h1>
-  <p style="color:var(--brand-muted);max-width:85%;margin-top:24px">A short introductory paragraph that frames the document — who it is for, what it covers, and why it matters.</p>`),
+    body: docWrap(`  <div style="position:relative;width:100%;height:34%;border-radius:var(--brand-radius);overflow:hidden">
+    <img src="assets/placeholder.svg" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" />
+    <div style="position:absolute;inset:0;background:linear-gradient(180deg, rgba(0,0,0,0) 30%, rgba(0,0,0,0.65) 100%)"></div>
+    <div style="position:absolute;left:4%;right:4%;bottom:7%">
+      <div class="kicker" style="font-size:20px;color:rgba(255,255,255,0.85)">Document type · Confidential</div>
+      <h1 style="margin:12px 0 0;color:#fff;font-size:calc(var(--brand-heading-size) * 0.72);line-height:1.1">One-line positioning statement</h1>
+    </div>
+  </div>
+  <p style="color:var(--brand-text);max-width:90%;margin-top:48px">A short introductory paragraph that frames the document — who it is for, what it covers, and why it matters.</p>`),
   },
   {
     id: "doc-sections",
@@ -177,7 +182,7 @@ ${docRow("3", "Third topic", "Two or three sentences that develop this point wit
     name: "Back cover",
     body: `<!-- html -->
 <div style="position:absolute;inset:0;display:flex;flex-direction:column">
-  <img src="assets/your-image.png" alt="" style="width:100%;flex:1;min-height:0;object-fit:cover" />
+  <img src="assets/placeholder.svg" alt="" style="width:100%;flex:1;min-height:0;object-fit:cover" />
   <div style="background:var(--brand-heading);padding:6% 9%">
     <h3 style="margin:0;color:#fff">Company name</h3>
     <p style="margin:14px 0 0;color:rgba(255,255,255,.8)">Street address · City · Country</p>

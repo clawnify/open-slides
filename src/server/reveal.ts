@@ -332,7 +332,21 @@ export function revealDoc(opts: DocOpts): string {
                parent.postMessage({ source: 'slides-preview', type: 'el-select', sid: sid, tag: textEl.tagName, anim: animOf(textEl), text: textEl.textContent }, '*');
                startEdit(textEl, sid);
              } else {
-               parent.postMessage({ source: 'slides-preview', type: 'bg-click' }, '*');
+               // Overlay-covered images (a hero photo under a gradient scrim +
+               // caption): the IMG never receives the click, so before treating
+               // this as a background click, look through the element stack
+               // beneath the pointer for one — clicking the scrim then swaps
+               // the photo, exactly like clicking a bare image.
+               var covered = null;
+               var under = document.elementsFromPoint ? document.elementsFromPoint(e.clientX, e.clientY) : [];
+               for (var ui = 0; ui < under.length; ui++) {
+                 if ((under[ui].tagName || '').toUpperCase() === 'IMG') { covered = under[ui]; break; }
+               }
+               if (covered) {
+                 parent.postMessage({ source: 'slides-preview', type: 'img-click', sid: parseInt(covered.getAttribute('data-sid') || '-1', 10), src: covered.getAttribute('src') || '' }, '*');
+               } else {
+                 parent.postMessage({ source: 'slides-preview', type: 'bg-click' }, '*');
+               }
              }
            });
            function startEdit(el, sid) {
