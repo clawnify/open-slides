@@ -149,7 +149,7 @@ as the replicated template.
 | DELETE | `/api/decks/{id}` | Delete |
 | GET  | `/api/decks/{id}/view` | Interactive reveal.js deck (HTML) |
 | GET  | `/api/decks/{id}/pdf` | Export to PDF (one slide/page per PDF page) |
-| GET  | `/api/decks/{id}/slide/{n}` | Render slide `n` (0-based) to a **PNG** — fetch it to SEE how your HTML actually rendered and confirm it looks right |
+| GET  | `/api/decks/{id}/slide/{n}` | Render slide `n` (0-based) to a **PNG** — fetch it to SEE how your HTML actually rendered and confirm it looks right. Add `?output=url` → `{ url, expires_at }` (presigned link) — use this when calling through an API proxy that can't return binary bodies |
 | GET  | `/api/formats` | List page formats (id, label, kind, canvas) |
 | GET  | `/api/templates?format={id}` | Designed starter slides/pages for a format |
 | GET  | `/api/brands` | List brands (id, name, tokens) |
